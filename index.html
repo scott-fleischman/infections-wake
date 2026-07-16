@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Infection's Wake</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair">+</div>
+
+    <div id="topleft">
+      <div id="clock-panel" class="panel">
+        <span id="day-label">Day 1</span>
+        <span id="time-label">06:00</span>
+        <span id="phase-label" class="phase-day">DAYLIGHT</span>
+      </div>
+      <div id="threat-panel" class="panel">
+        <div class="panel-title">THREAT FORECAST</div>
+        <div class="row"><span>Night threat</span><span id="threat-level">—</span></div>
+        <div class="row"><span>Major assault</span><span id="assault-eta">—</span></div>
+        <div class="row"><span>Confidence</span><span id="forecast-conf">—</span></div>
+        <div class="row"><span>Dominant signature</span><span id="dom-sig">—</span></div>
+        <div class="row" id="strain-row"><span>Strain indicators</span><span id="strain-ind">—</span></div>
+        <div id="incursion-alert" class="hidden">⚠ INCURSION IN PROGRESS</div>
+      </div>
+      <div id="sig-panel" class="panel hidden">
+        <div class="panel-title">SIGNATURE PROFILE <span class="dim">(base area)</span></div>
+        <div class="sig-row"><span>Heat</span><div class="sig-bar"><div id="sig-heat"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>Light</span><div class="sig-bar"><div id="sig-light"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>Vibration</span><div class="sig-bar"><div id="sig-vibration"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>CO₂</span><div class="sig-bar"><div id="sig-co2"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>Blood</span><div class="sig-bar"><div id="sig-blood"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>Electrical</span><div class="sig-bar"><div id="sig-electrical"></div></div></div>
+      </div>
+    </div>
+
+    <div id="topright">
+      <div id="score-panel" class="panel">
+        <div class="row"><span>Valley Recovery</span><span id="valley-recovery">0%</span></div>
+        <div class="row"><span>Survival score</span><span id="score">0</span></div>
+      </div>
+      <div id="power-warning" class="panel warn hidden"></div>
+    </div>
+
+    <div id="assault-banner" class="hidden">
+      <div id="assault-title">MAJOR ASSAULT</div>
+      <div id="assault-remaining">Hostiles remaining: 0</div>
+    </div>
+
+    <div id="toasts"></div>
+    <div id="prompt" class="hidden"></div>
+
+    <div id="bottomleft">
+      <div class="stat-row"><span class="stat-label">VIT</span><div class="bar"><div id="bar-health" class="fill health"></div></div></div>
+      <div class="stat-row"><span class="stat-label">SAN</span><div class="bar"><div id="bar-sanity" class="fill sanity"></div></div></div>
+      <div class="stat-row"><span class="stat-label">NRG</span><div class="bar"><div id="bar-hunger" class="fill hunger"></div></div></div>
+      <div id="recovery-status" class="rec-ok">Emergency refuge recovery unused</div>
+    </div>
+
+    <div id="hotbar"></div>
+
+    <div id="vignette"></div>
+    <div id="sanity-fx"></div>
+    <div id="night-fade"></div>
+  </div>
+
+  <!-- Inventory / crafting -->
+  <div id="inv-screen" class="screen hidden">
+    <div class="screen-inner wide">
+      <h2>FIELD KIT <span class="dim">— [E] close</span></h2>
+      <div id="inv-columns">
+        <div>
+          <h3>Inventory</h3>
+          <div id="inv-grid"></div>
+        </div>
+        <div>
+          <h3>Fabrication</h3>
+          <div id="craft-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Story log -->
+  <div id="log-screen" class="screen hidden">
+    <div class="screen-inner wide">
+      <h2>STORY LOG <span class="dim">— [J] close</span></h2>
+      <div id="log-tabs">
+        <button data-tab="entries" class="tab active">Archive</button>
+        <button data-tab="bestiary" class="tab">Bestiary</button>
+      </div>
+      <div id="log-entries" class="log-tabpane"></div>
+      <div id="log-bestiary" class="log-tabpane hidden"></div>
+    </div>
+  </div>
+
+  <!-- Archive catalog confirmation -->
+  <div id="catalog-card" class="screen hidden">
+    <div class="screen-inner">
+      <h2 id="catalog-title">Document found</h2>
+      <div id="catalog-body"></div>
+      <div class="btn-row">
+        <button id="catalog-confirm" class="btn primary">Catalog into Story Log</button>
+        <button id="catalog-cancel" class="btn">Leave it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Machine interaction panel (furnace, generator, drill, turret...) -->
+  <div id="machine-screen" class="screen hidden">
+    <div class="screen-inner">
+      <h2 id="machine-title">Machine</h2>
+      <div id="machine-body"></div>
+      <div class="btn-row" id="machine-buttons"></div>
+    </div>
+  </div>
+
+  <!-- Pause -->
+  <div id="pause-screen" class="screen hidden">
+    <div class="screen-inner">
+      <h2>PAUSED</h2>
+      <div class="btn-col">
+        <button id="btn-resume" class="btn primary">Resume</button>
+        <button id="btn-savequit" class="btn">Save &amp; quit to menu</button>
+      </div>
+      <div id="controls-help"></div>
+    </div>
+  </div>
+
+  <!-- Death / recovery -->
+  <div id="death-screen" class="screen hidden">
+    <div class="screen-inner">
+      <h2 id="death-title">SIGNAL LOST</h2>
+      <div id="death-body"></div>
+      <div class="btn-row"><button id="btn-respawn" class="btn primary">Stabilize</button></div>
+    </div>
+  </div>
+
+  <!-- Run failure -->
+  <div id="fail-screen" class="screen hidden">
+    <div class="screen-inner">
+      <h2>RUN FAILED</h2>
+      <div id="fail-body"></div>
+      <div class="btn-row"><button id="btn-fail-menu" class="btn primary">Return to menu</button></div>
+    </div>
+  </div>
+
+  <!-- Main menu -->
+  <div id="menu-screen" class="screen">
+    <div class="screen-inner menu">
+      <h1 class="title">INFECTION'S<br/>WAKE</h1>
+      <p class="tagline">The valley is blind. It is listening.</p>
+      <div class="btn-col">
+        <button id="btn-continue" class="btn primary hidden">Continue</button>
+        <button id="btn-new" class="btn primary">New world</button>
+        <button id="btn-new-hardcore" class="btn">New world (Hardcore)</button>
+      </div>
+      <div id="menu-help"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
