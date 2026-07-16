@@ -23,7 +23,7 @@ export class HUD {
     const fill = (node) => {
       clear(node);
       line(node, [['WASD', true], [' move · ', false], ['Mouse', true], [' look · ', false], ['Space', true], [' jump · ', false], ['Shift', true], [' sprint', false]]);
-      line(node, [['LMB', true], [' mine / attack · ', false], ['RMB', true], [' place block', false]]);
+      line(node, [['LMB (hold)', true], [' break block / attack · ', false], ['RMB', true], [' place block', false]]);
       line(node, [['1–6', true], [' hotbar · ', false], ['E', true], [' field kit & crafting', false]]);
       line(node, [['F', true], [' interact (doors, machines, archives, beds)', false]]);
       line(node, [['J', true], [' story log · ', false], ['Esc', true], [' pause', false]]);
@@ -74,6 +74,25 @@ export class HUD {
     if (!text) { $('prompt').classList.add('hidden'); return; }
     $('prompt').textContent = text;
     $('prompt').classList.remove('hidden');
+  }
+
+  // Radial progress at the crosshair while a block is being broken.
+  mineRing(progress) {
+    const c = $('mine-ring');
+    if (progress == null) {
+      if (this._ringP != null) { c.classList.add('hidden'); this._ringP = null; }
+      return;
+    }
+    c.classList.remove('hidden');
+    if (this._ringP != null && Math.abs(progress - this._ringP) < 0.02) return;
+    this._ringP = progress;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(207,227,212,0.22)';
+    ctx.beginPath(); ctx.arc(22, 22, 16, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(224,168,62,0.95)';
+    ctx.beginPath(); ctx.arc(22, 22, 16, -Math.PI / 2, -Math.PI / 2 + Math.min(1, progress) * Math.PI * 2); ctx.stroke();
   }
 
   // ---------- bars / clock ----------
@@ -188,6 +207,7 @@ export class HUD {
     const cataloged = g.story.entries.filter(e => !e.synth).length;
     return [
       { label: 'Craft a stone tool', done: anyTool || g.tiers.has('iron') },
+      { label: 'Hang a door on your shelter', done: !!g.unlocks.doorHung },
       { label: 'Survive a night assault', done: g.valleyFlags.has('firstAssault') },
       { label: 'Smelt iron at a furnace', done: g.tiers.has('iron') },
       { label: 'Run a fuel generator', done: !!g.unlocks.genRan },

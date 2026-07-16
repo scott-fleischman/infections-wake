@@ -376,6 +376,70 @@ export function buildInfectedMesh(strainKey) {
 // Single-voxel display mesh (gallery): a cube shaded like the world mesher
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Ground litter — natural scatter items rendered as recognizable objects
+// lying on the ground (Vintage Story style) instead of floating cubes.
+// Origin: center-bottom of the pile. `seed` gives deterministic variety.
+// ---------------------------------------------------------------------------
+
+function litterRng(seed) {
+  let s = (seed * 2654435761 + 1013904223) >>> 0;
+  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+function buildSticks(seed) {
+  const g = new THREE.Group();
+  const r = litterRng(seed);
+  const bark = lambert(0x7a5c34), dark = lambert(0x5d4526);
+  const a = box(g, 0.55, 0.045, 0.05, bark, 0, 0.025, 0);
+  a.rotation.y = 0.4 + r() * 0.6;
+  const b = box(g, 0.42, 0.04, 0.045, dark, 0.09, 0.02, 0.1);
+  b.rotation.y = -0.6 - r() * 0.6;
+  const twig = box(g, 0.16, 0.03, 0.035, dark, -0.15, 0.055, 0.06);
+  twig.rotation.y = 1.1 + r() * 0.5;
+  return g;
+}
+
+function buildStones(seed) {
+  const g = new THREE.Group();
+  const r = litterRng(seed + 7);
+  const cols = [0x8a8f96, 0x74787f, 0x666a70];
+  for (let i = 0; i < 3; i++) {
+    const rad = 0.09 + r() * 0.05;
+    const m = new THREE.Mesh(new THREE.DodecahedronGeometry(rad, 0), lambert(cols[i]));
+    m.scale.y = 0.55 + r() * 0.2;
+    m.position.set((r() - 0.5) * 0.34, rad * m.scale.y * 0.8, (r() - 0.5) * 0.34);
+    m.rotation.set(r() * Math.PI, r() * Math.PI, r() * Math.PI);
+    g.add(m);
+  }
+  return g;
+}
+
+function buildFiberTuft(seed) {
+  const g = new THREE.Group();
+  const r = litterRng(seed + 13);
+  const cols = [lambert(0x8fae5a), lambert(0x6d8a44), lambert(0xa5bd6e)];
+  for (let i = 0; i < 6; i++) {
+    const h = 0.2 + r() * 0.14;
+    const blade = box(g, 0.028, h, 0.02, cols[i % 3], 0, h / 2, 0);
+    const a = (i / 6) * Math.PI * 2 + r() * 0.8;
+    blade.position.x = Math.cos(a) * 0.07;
+    blade.position.z = Math.sin(a) * 0.07;
+    blade.rotation.z = Math.cos(a) * (0.25 + r() * 0.3);
+    blade.rotation.x = -Math.sin(a) * (0.25 + r() * 0.3);
+  }
+  return g;
+}
+
+// Returns a lying-on-the-ground mesh for natural scatter items, or null if
+// this item has no ground form (caller falls back to icon sprite/mini block).
+export function buildGroundItem(itemId, seed = 0) {
+  if (itemId === 'stick') return buildSticks(seed);
+  if (itemId === 'stone_shard') return buildStones(seed);
+  if (itemId === 'fiber') return buildFiberTuft(seed);
+  return null;
+}
+
 export function buildBlockMesh(id) {
   const def = BLOCKS[id];
   const g = new THREE.Group();
@@ -432,11 +496,12 @@ export function animateProp(group, t, state = {}) {
 }
 
 export function disposeGroup(group) {
+  const disposeMat = (m) => { if (m.map) m.map.dispose(); m.dispose(); };
   group.traverse(o => {
     if (o.geometry) o.geometry.dispose();
     if (o.material) {
-      if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
-      else o.material.dispose();
+      if (Array.isArray(o.material)) o.material.forEach(disposeMat);
+      else disposeMat(o.material);
     }
   });
 }

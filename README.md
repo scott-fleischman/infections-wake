@@ -21,11 +21,25 @@ npm test         # headless test suite (node --test, no browser needed)
 
 Chromium-based browsers and Firefox work; WebGL required.
 
-**Model archive:** `/gallery.html` (linked from the dev server root, e.g.
-`http://localhost:5173/gallery.html`) is a viewer for every model in the
-game — machines, infected specimens, blocks, item icons, and seeded tree
-generation — rendered with the exact same builders the game uses
-(`src/models.js`, `treeShape()`), on a drag-to-rotate turntable.
+**Play online:** every push to `main` deploys the game to GitHub Pages
+(`.github/workflows/deploy.yml` — tests must pass first):
+<https://scott-fleischman.github.io/infections-wake/>
+
+**Model archive:** `/gallery.html` (linked from the start menu) is a viewer
+for every model in the game — machines, infected specimens, blocks, ground
+litter, item icons, and seeded tree generation — rendered with the exact same
+builders the game uses (`src/models.js`, `treeShape()`), on a drag-to-rotate
+turntable.
+
+**Field manual:** `/docs.html` renders this README, the full design spec, and
+the original project input in the browser (no innerHTML — a small markdown
+renderer in `src/markdown.js`), with a PLAY NOW link back to the game.
+
+**Dev scenarios:** the start menu's DEV SCENARIOS strip (or
+`?scenario=<tooled|fortified|ironage|powered|lab|boss>[&seed=…]`) jumps to a
+story checkpoint with a matching world — tools granted, machines placed and
+fueled, player teleported. Scenario links never overwrite a real save; that
+takes an explicit menu click.
 
 ## Controls
 
@@ -33,7 +47,7 @@ generation — rendered with the exact same builders the game uses
 | --- | --- |
 | WASD / mouse | Move / look (click to capture the mouse) |
 | Space / Shift | Jump / sprint |
-| LMB | Mine block / attack |
+| LMB (hold) | Break block (crosshair ring fills) / attack |
 | RMB | Place block / eat / use item |
 | 1–6, Q | Select hotbar slot |
 | E | Field kit (inventory + fabrication) |
@@ -78,6 +92,9 @@ Systems map 1:1 onto the spec's module list (§23):
 | `src/props.js` | In-world prop lifecycle + animation (turret aim, flywheels, fire flicker) |
 | `src/icons.js` | Canvas item-icon painter — shared by HUD + gallery |
 | `src/gallery.js` | `/gallery.html` model archive viewer |
+| `src/scenarios.js` | Dev checkpoints: story-stage worlds for playtesting |
+| `src/markdown.js` | Markdown → DOM renderer (no innerHTML) for the docs page |
+| `src/docs.js` | `/docs.html` field manual (README, spec, project input) |
 | `src/player.js` | First-person controller, AABB physics, DDA raycast |
 | `src/signature.js` | The signature field — emitters, propagation, sampling (§5) |
 | `src/infected.js` | Gradient-following infected AI; three roles + colony host (§12) |
@@ -97,10 +114,12 @@ presentation only, never simulation state.
 
 ## Testing
 
-`npm test` runs 72 headless tests (Node's built-in runner, no browser):
+`npm test` runs 97 headless tests (Node's built-in runner, no browser):
 movement math, worldgen determinism and structure placement, signature
 falloff/wall attenuation, the power solver, the recovery ladder, crafting,
-the threat director, and an integration test where a machine eater
-gradient-follows an electrical emitter in pure Node. The sim layer never
+the threat director, an integration test where a machine eater
+gradient-follows an electrical emitter in pure Node, every dev scenario
+applied against real generated terrain, and the markdown renderer against
+the actual project documents. The sim layer never
 touches the DOM, so most behavior is checkable without playtesting;
 the browser is only needed to validate rendering and input.

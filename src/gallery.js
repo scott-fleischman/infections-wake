@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { B, B_NAME, BLOCKS, ITEMS, STRAINS, MACHINES } from './config.js';
-import { buildProp, buildInfectedMesh, buildBlockMesh, animateProp, disposeGroup } from './models.js';
+import { buildProp, buildInfectedMesh, buildBlockMesh, buildGroundItem, animateProp, disposeGroup } from './models.js';
 import { treeShape } from './world.js';
 import { RNG } from './rng.js';
 import { makeIcon } from './icons.js';
@@ -172,6 +172,25 @@ function showStrain(key) {
   ], s.senses);
 }
 
+const LITTER = [
+  ['stick', 'Fallen sticks'],
+  ['stone_shard', 'Loose stones'],
+  ['fiber', 'Fiber tuft'],
+];
+
+function showLitter(key) {
+  const name = LITTER.find(([k]) => k === key)[1];
+  const g = buildGroundItem(key, 3);
+  const pad = buildBlockMesh(B.GRASS);
+  pad.position.y = -1;
+  g.add(pad);
+  showObject(g);
+  setCard('SURFACE SURVEY', name, 'Natural scatter — walk over it to collect. The same builder renders it in-world, lying where it fell.', [
+    ['Collect', 'walk over'],
+    ['Also from', key === 'stick' ? 'chopping leaves' : key === 'stone_shard' ? 'digging gravel · mining stone' : 'leaves · digging turf'],
+  ]);
+}
+
 function showBlock(id) {
   const def = BLOCKS[id];
   showObject(buildBlockMesh(id));
@@ -252,6 +271,8 @@ function buildList() {
   } else if (activeCat === 'blocks') {
     for (const id of BLOCK_IDS)
       list.appendChild(listItem(BLOCKS[id].name, B_NAME[id].toLowerCase(), () => select(String(id)), activeKey === String(id)));
+    for (const [key, name] of LITTER)
+      list.appendChild(listItem(name, 'ground litter', () => select('litter:' + key), activeKey === 'litter:' + key));
   } else if (activeCat === 'items') {
     for (const k of Object.keys(ITEMS))
       list.appendChild(listItem(ITEMS[k].name, ITEMS[k].tool || '', () => select(k), activeKey === k));
@@ -304,6 +325,7 @@ function select(key) {
   activeKey = key;
   if (activeCat === 'machines') showMachine(MACHINE_ENTRIES.find(e => e.key === key));
   else if (activeCat === 'infected') showStrain(key);
+  else if (activeCat === 'blocks' && key.startsWith('litter:')) showLitter(key.slice(7));
   else if (activeCat === 'blocks') showBlock(Number(key));
   else if (activeCat === 'items') {
     const def = itemDef(key);

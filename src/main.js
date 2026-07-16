@@ -8,6 +8,8 @@ import { Signature } from './signature.js';
 import { InfectedManager } from './infected.js';
 import { Machines } from './power.js';
 import { Props } from './props.js';
+import { buildGroundItem, buildBlockMesh, disposeGroup } from './models.js';
+import { makeIcon } from './icons.js';
 import { Director } from './director.js';
 import { Sanity } from './sanity.js';
 import { Recovery } from './recovery.js';
@@ -16,6 +18,7 @@ import { HUD } from './hud.js';
 import { GameAudio } from './audio.js';
 import { LightPool } from './light.js';
 import { SaveStore } from './save.js';
+import { SCENARIOS, applyScenario } from './scenarios.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -92,9 +95,9 @@ class Game {
   // ------------------------------------------------------------------
   // World lifecycle
   // ------------------------------------------------------------------
-  newWorld(hardcore = false) {
-    const seed = 'wake-' + Math.floor(Math.random() * 1e9);
-    this.setupWorld(seed, hardcore, null);
+  newWorld(hardcore = false, scenario = null, seed = null) {
+    seed = seed || 'wake-' + Math.floor(Math.random() * 1e9);
+    this.setupWorld(seed, hardcore, null, scenario);
   }
 
   continueWorld() {
@@ -103,13 +106,13 @@ class Game {
     this.setupWorld(data.seed, data.hardcore, data);
   }
 
-  setupWorld(seed, hardcore, data) {
+  setupWorld(seed, hardcore, data, scenario = null) {
     // clear any prior scene content (meshes AND GPU resources)
     if (this.world) {
       this.scene.remove(this.world.group);
       this.world.group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
     }
-    for (const p of this.pickups) if (p.mesh) { this.scene.remove(p.mesh); p.mesh.geometry?.dispose?.(); }
+    for (const p of this.pickups) if (p.mesh) { this.scene.remove(p.mesh); disposeGroup(p.mesh); }
     for (const c of this.critters) if (c.mesh) this.scene.remove(c.mesh);
     if (this.props) this.props.removeAll();
     if (this.infected) this.infected.removeAll();
@@ -154,6 +157,7 @@ class Game {
     this.bossHpMarks = new Set();
     this.pickupsTaken = new Set();
     this.hintStage = 0;
+    this.scenarioKey = scenario || null; // scenario saves are marked (see boot guard)
     this.specCrafts = new Set();
 
     this._loadedPlayerPos = false;
@@ -162,12 +166,14 @@ class Game {
     if (!this._loadedPlayerPos) this.player.spawnAt(this.world.spawnPoint());
     this.sig.scanWorld();
     this.props.scanWorld(); // prop meshes for model-rendered blocks (gen + saved edits)
-    // restore lights for player-placed torches/campfires
+    // restore lights for player-placed torches/campfires; a standing door
+    // from an older save also satisfies the door objective
     for (const [k, v] of this.world.edits) {
       if (v === B.TORCH || v === B.CAMPFIRE) {
         const [x, y, z] = k.split(',').map(Number);
         this.refreshBlockLight(x, y, z, v);
       }
+      if (v === B.DOOR || v === B.DOOR_OPEN) this.unlocks.doorHung = true;
     }
     this.spawnPickups();
     for (const pk of (this._pendingDropped || [])) this.dropItemAt({ x: pk.x, y: pk.y - 0.4, z: pk.z }, pk.item, pk.n);
@@ -187,7 +193,9 @@ class Game {
     this.requestLock();
     this.audio.ensure(); this.audio.resume();
 
-    if (!data) {
+    if (!data && scenario && applyScenario(this, scenario)) {
+      // scenario worlds get their own toast; skip the newcomer intro
+    } else if (!data) {
       this.toast("The valley is quiet. Gather loose stones and sticks.", 'important');
       setTimeout(() => this.toast('Craft tools with [E]. Night comes — and something forecasts with it.'), 4500);
     } else {
@@ -199,6 +207,8 @@ class Game {
     this.t = d.t;
     this.day = Math.floor(this.t / TIME.DAY_LENGTH) + 1; // threat scaling continuity
     this.score = d.score || 0;
+    this.hintStage = d.hintStage ?? 0;
+    this.scenarioKey = d.scenario || null;
     this.valleyFlags = new Set(d.valleyFlags || []);
     this.tiers = new Set(d.tiers || []);
     this.unlocks = d.unlocks || { sigPanel: false, sigAll: false };
@@ -257,23 +267,42 @@ class Game {
     }
   }
 
+  // Visual for a pickup: natural scatter lies on the ground as a real object,
+  // block drops are mini blocks, everything else billboards its field-kit icon.
+  pickupMesh(itemId, seed = 0) {
+    const ground = buildGroundItem(itemId, seed);
+    if (ground) { ground.userData.grounded = true; return ground; }
+    const wrap = new THREE.Group();
+    if (itemId.startsWith('b:')) {
+      const mini = buildBlockMesh(Number(itemId.slice(2)));
+      mini.scale.setScalar(0.26);
+      mini.position.y = -0.13; // block mesh origin is its bottom; center it
+      wrap.add(mini);
+    } else {
+      const tex = new THREE.CanvasTexture(makeIcon(itemDef(itemId), 64));
+      tex.magFilter = THREE.NearestFilter;
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+      spr.scale.setScalar(0.5);
+      wrap.add(spr);
+    }
+    return wrap;
+  }
+
   spawnPickups() {
     this.pickups = [];
-    const geo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
     this.world.pickups.forEach((p, i) => {
       if (this.pickupsTaken.has(i)) return;
-      const def = ITEMS[p.item];
-      const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: def.color }));
+      const mesh = this.pickupMesh(p.item, i);
+      const grounded = !!mesh.userData.grounded;
       mesh.position.set(p.x, p.y, p.z);
+      if (grounded) mesh.rotation.y = (i * 2.39996) % (Math.PI * 2); // vary the litter
       this.scene.add(mesh);
-      this.pickups.push({ ...p, mesh, idx: i, bob: Math.random() * 6 });
+      this.pickups.push({ ...p, mesh, idx: i, bob: Math.random() * 6, grounded });
     });
   }
 
   dropItemAt(pos, id, n = 1) {
-    const def = itemDef(id);
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.22),
-      new THREE.MeshLambertMaterial({ color: def?.color ?? 0x999999 }));
+    const mesh = this.pickupMesh(id, (this._dropSeq = (this._dropSeq || 0) + 1));
     mesh.position.set(pos.x, pos.y + 0.4, pos.z);
     this.scene.add(mesh);
     const p = { x: pos.x, y: pos.y + 0.4, z: pos.z, item: id, n, mesh, idx: -1, bob: 0 };
@@ -326,10 +355,14 @@ class Game {
     document.addEventListener('mousedown', (e) => {
       if (this.state !== 'play' || this.hud.isScreenOpen()) return;
       if (document.pointerLockElement !== this.renderer.domElement) return;
-      if (e.button === 0) { this.onPrimary(); this.player.miningHeld = true; }
+      if (e.button === 0) { this.onPrimary(); this.player.miningHeld = true; this._lmbDownAt = performance.now(); }
       if (e.button === 2) this.onSecondary();
     });
-    document.addEventListener('mouseup', (e) => { if (e.button === 0 && this.player) this.player.miningHeld = false; });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button !== 0 || !this.player) return;
+      this.player.miningHeld = false;
+      this.maybeHoldHint();
+    });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     // losing focus must not leave movement/mining keys latched
     const releaseInputs = () => {
@@ -385,6 +418,15 @@ class Game {
       this.updateMenu();
       this.hud.show('menu-screen');
     });
+    // dev scenarios: skip ahead to a story checkpoint with a matching world
+    const list = $('scenario-list');
+    for (const [key, sc] of Object.entries(SCENARIOS)) {
+      const b = document.createElement('button');
+      b.textContent = sc.name;
+      b.title = sc.desc;
+      b.addEventListener('click', () => { SaveStore.clear(); this.newWorld(false, key); });
+      list.appendChild(b);
+    }
     $('catalog-cancel').addEventListener('click', () => { this.hud.closeAll(); this.requestLock(); });
     $('catalog-confirm').addEventListener('click', () => {
       if (this.pendingArchive != null) {
@@ -426,6 +468,20 @@ class Game {
   // ------------------------------------------------------------------
   // Primary / secondary / interact
   // ------------------------------------------------------------------
+  // A quick tap on a breakable block usually means the player expected a
+  // click-to-break interaction — teach hold-to-mine, at most twice.
+  maybeHoldHint() {
+    if (this.state !== 'play' || (this._holdHints || 0) >= 2) return;
+    if (!this._lmbDownAt || performance.now() - this._lmbDownAt > 350) return;
+    if (this.attackCd > 0) return; // that tap was a hit on a creature
+    const hit = this.player.raycast();
+    if (!hit) return;
+    const def = BLOCKS[hit.id];
+    if (!def || def.hardness == null || def.hardness === Infinity || def.interact || def.archive) return;
+    this._holdHints = (this._holdHints || 0) + 1;
+    this.toast('Hold LMB to break blocks — the ring at your crosshair fills as it cracks.', 'important');
+  }
+
   onPrimary() {
     this.audio.resume();
     if (this.attackCd > 0) return;
@@ -542,6 +598,7 @@ class Game {
     }
     if (id === B.FURNACE) this.furnaces.set(`${x},${y},${z}`, { x, y, z, type: 'furnace', fuel: 0, queue: [], progress: 0, out: {} });
     if (id === B.TORCH || id === B.CAMPFIRE) this.refreshBlockLight(x, y, z, id);
+    if (id === B.DOOR) this.unlocks.doorHung = true; // objectives (persisted via save)
   }
 
   refreshBlockLight(x, y, z, id) {
@@ -587,6 +644,12 @@ class Game {
       if (overflow > 0) this.dropItemAt({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, drop.id, overflow);
       this.audio.pickup(); this.hud.updateHotbar();
     }
+    // digging up turf sometimes yields plant fiber alongside the dirt
+    if (id === B.GRASS && Math.random() < 0.3) {
+      const over = this.inv.add('fiber', 1);
+      if (over > 0) this.dropItemAt({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 'fiber', over);
+      this.hud.updateHotbar();
+    }
     // falling blocks above (sand/gravel) — settle the whole column
     let fy = y;
     while (BLOCKS[this.world.get(x, fy + 1, z)]?.falls) {
@@ -603,7 +666,10 @@ class Game {
       case B.IRON_ORE: return { id: 'iron_ore_raw', n: 1 };
       case B.COAL_ORE: return { id: 'coal', n: 1 + (Math.random() < 0.5 ? 1 : 0) };
       case B.GRASS: case B.DIRT: return { id: 'b:' + B.DIRT, n: 1 };
-      case B.LEAVES: return Math.random() < 0.3 ? { id: Math.random() < 0.5 ? 'stick' : 'fiber', n: 1 } : null;
+      // renewable gathering (Vintage Story style): foliage sheds sticks/fiber,
+      // gravel hides knappable shards
+      case B.LEAVES: return Math.random() < 0.4 ? { id: Math.random() < 0.6 ? 'stick' : 'fiber', n: 1 } : null;
+      case B.GRAVEL: return Math.random() < 0.45 ? { id: 'stone_shard', n: 1 } : { id: 'b:' + B.GRAVEL, n: 1 };
       case B.COLONY: return Math.random() < 0.25 ? { id: 'iron_ampoule', n: 1 } : null;
       default:
         if (def2(id)?.drop != null) return { id: 'b:' + def2(id).drop, n: 1 };
@@ -983,10 +1049,11 @@ class Game {
       this._mineBox.visible = false;
       this.scene.add(this._mineBox);
     }
-    if (!hit) { this._mineBox.visible = false; return; }
+    if (!hit) { this._mineBox.visible = false; this.hud.mineRing(null); return; }
     this._mineBox.visible = true;
     this._mineBox.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
     this._mineBox.material.opacity = 0.3 + progress * 0.6;
+    this.hud.mineRing(progress);
     if (Math.random() < 0.3) this.audio.dig();
   }
 
@@ -1184,6 +1251,18 @@ class Game {
       else if (def.interact === 'bench') text = '[F] Use crafting bench';
       else if (def.interact === 'furnace') text = '[F] Use furnace';
       else if (def.interact === 'machine') text = `[F] ${def.name}`;
+      else if (def.hardness != null && def.hardness !== Infinity && !this.player.miningHeld) {
+        // mineable readout: name + how to break it + best tool
+        const verbs = { pick: 'mine', axe: 'chop', shovel: 'dig' };
+        const names = { pick: 'pickaxe', axe: 'axe', shovel: 'shovel' };
+        const held = this.player.heldItem();
+        let hint = `hold LMB to ${verbs[def.tool] || 'break'}`;
+        if (def.toolMin != null && !(held?.def?.tool === def.tool && held.def.tier >= def.toolMin))
+          hint = `needs an iron ${names[def.tool]}`;
+        else if (def.tool && held?.def?.tool !== def.tool)
+          hint += ` (${names[def.tool]} is faster)`;
+        text = `${def.name} — ${hint}`;
+      }
     } else {
       const e = this.world.poi.emergency;
       if (Math.hypot(e.x + 0.5 - this.player.pos.x, e.z + 0.5 - this.player.pos.z) < 2.2 && Math.abs(e.y - this.player.pos.y) < 2)
@@ -1196,10 +1275,13 @@ class Game {
     const p = this.player.pos;
     for (const pk of this.pickups) {
       pk.bob += dt * 2;
-      pk.mesh.position.y = pk.y + Math.sin(pk.bob) * 0.08;
-      pk.mesh.rotation.y += dt;
+      if (!pk.grounded) { // scatter litter lies still until magnetized
+        pk.mesh.position.y = pk.y + Math.sin(pk.bob) * 0.08;
+        pk.mesh.rotation.y += dt;
+      }
       const d = Math.hypot(pk.x - p.x, pk.y - (p.y + 0.8), pk.z - p.z);
       if (d < 2.0) { // magnet
+        pk.grounded = false;
         pk.x += (p.x - pk.x) * 6 * dt;
         pk.y += (p.y + 0.8 - pk.y) * 6 * dt;
         pk.z += (p.z - pk.z) * 6 * dt;
@@ -1214,6 +1296,7 @@ class Game {
           if (pk.idx >= 0) this.pickupsTaken.add(pk.idx);
           if (pk.sigKey) this.sig.removeDynamic(pk.sigKey);
           this.scene.remove(pk.mesh);
+          disposeGroup(pk.mesh);
         }
       }
     }
@@ -1270,3 +1353,24 @@ function def2(id) { return BLOCKS[id]; }
 // boot
 const game = new Game();
 window.__game = game; // debugging hook
+
+// ?scenario=<key>[&seed=<any>][&hardcore=1] — jump straight into a checkpoint
+// world (see scenarios.js). Used for playtesting story sections and e2e tests.
+// A real (non-scenario) save is never overwritten from a URL: that path needs
+// an explicit click on the menu's DEV SCENARIOS buttons.
+const params = new URLSearchParams(location.search);
+const scenarioKey = params.get('scenario');
+if (scenarioKey && SCENARIOS[scenarioKey]) {
+  const existing = SaveStore.read();
+  if (existing && !existing.scenario) {
+    console.warn('Refusing to replace a real save from a ?scenario= link. Use the DEV SCENARIOS menu buttons.');
+  } else {
+    SaveStore.clear();
+    game.newWorld(params.get('hardcore') === '1', scenarioKey, params.get('seed'));
+    // strip the param so a reload continues the (autosaved) scenario world
+    // instead of wiping it and rolling a fresh seed
+    history.replaceState(null, '', location.pathname);
+  }
+} else if (scenarioKey) {
+  console.warn(`Unknown scenario "${scenarioKey}". Valid: ${Object.keys(SCENARIOS).join(', ')}`);
+}

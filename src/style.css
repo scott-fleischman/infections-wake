@@ -45,6 +45,11 @@ html, body {
   text-shadow: 0 0 4px rgba(0,0,0,0.9);
 }
 
+#mine-ring {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--panel-edge);
@@ -287,6 +292,32 @@ html, body {
   column-count: 2; column-gap: 30px; line-height: 1.7;
 }
 #menu-help b, #controls-help b { color: var(--ink); font-weight: 500; }
+
+.menu-dev {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+  width: min(96vw, 1080px);
+  display: flex; gap: 34px; justify-content: center; align-items: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 10px 18px 12px;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+  text-align: left;
+}
+.menu-dev-col { min-width: 0; }
+.menu-dev-title {
+  font-family: var(--font-display); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.22em; color: var(--ink-dim); margin: 2px 0 6px;
+}
+.menu-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.menu-links a, .menu-links button {
+  font: inherit; font-size: 11px; letter-spacing: 0.08em;
+  color: var(--ink); text-decoration: none;
+  background: rgba(224,168,62,0.05);
+  border: 1px solid var(--panel-edge);
+  padding: 4px 10px; cursor: pointer;
+  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+}
+.menu-links a:hover, .menu-links button:hover { border-color: var(--amber); color: var(--amber-hot); }
 
 /* inventory */
 #inv-columns { display: grid; grid-template-columns: 1fr 1.2fr; gap: 26px; }

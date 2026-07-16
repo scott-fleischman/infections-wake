@@ -16,6 +16,8 @@ export const SaveStore = {
         hardcore: game.recovery.hardcore,
         t: game.t,
         score: game.score,
+        hintStage: game.hintStage,
+        scenario: game.scenarioKey || null,
         valleyFlags: [...game.valleyFlags],
         tiers: [...game.tiers],
         unlocks: game.unlocks,

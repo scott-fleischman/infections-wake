@@ -12,6 +12,7 @@
   <!-- In-game HUD -->
   <div id="hud" class="hidden">
     <div id="crosshair">+</div>
+    <canvas id="mine-ring" class="hidden" width="44" height="44"></canvas>
 
     <div id="topleft">
       <div id="clock-panel" class="panel">
@@ -165,6 +166,19 @@
         <button id="btn-new-hardcore" class="btn">New world (Hardcore)</button>
       </div>
       <div id="menu-help"></div>
+    </div>
+    <div class="menu-dev">
+      <div class="menu-dev-col">
+        <div class="menu-dev-title">PROJECT LAZARUS ARCHIVE</div>
+        <div class="menu-links">
+          <a href="./gallery.html">MODEL ARCHIVE</a>
+          <a href="./docs.html">FIELD MANUAL</a>
+        </div>
+      </div>
+      <div class="menu-dev-col">
+        <div class="menu-dev-title">DEV SCENARIOS <span class="dim">— skip ahead for playtesting</span></div>
+        <div id="scenario-list" class="menu-links"></div>
+      </div>
     </div>
   </div>
 

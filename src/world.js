@@ -245,9 +245,10 @@ export class World {
         const top = this.get(x, surf, z);
         if (top !== B.GRASS && top !== B.SAND) continue;
         if (this.get(x, surf + 1, z) !== B.AIR) continue;
-        if (rng.chance(0.012)) this.pickups.push({ x: x + 0.5, y: surf + 1.3, z: z + 0.5, item: 'stone_shard', n: rng.int(1, 2) });
-        else if (rng.chance(0.012)) this.pickups.push({ x: x + 0.5, y: surf + 1.3, z: z + 0.5, item: 'stick', n: rng.int(1, 2) });
-        else if (rng.chance(0.006)) this.pickups.push({ x: x + 0.5, y: surf + 1.3, z: z + 0.5, item: 'fiber', n: rng.int(1, 3) });
+        // y = top face of the surface block: litter lies ON the ground
+        if (rng.chance(0.012)) this.pickups.push({ x: x + 0.5, y: surf + 1.02, z: z + 0.5, item: 'stone_shard', n: rng.int(1, 2) });
+        else if (rng.chance(0.012)) this.pickups.push({ x: x + 0.5, y: surf + 1.02, z: z + 0.5, item: 'stick', n: rng.int(1, 2) });
+        else if (rng.chance(0.006)) this.pickups.push({ x: x + 0.5, y: surf + 1.02, z: z + 0.5, item: 'fiber', n: rng.int(1, 3) });
       }
     }
   }
