@@ -7,6 +7,7 @@ import { Inventory, itemDef } from './inventory.js';
 import { Signature } from './signature.js';
 import { InfectedManager } from './infected.js';
 import { Machines } from './power.js';
+import { Props } from './props.js';
 import { Director } from './director.js';
 import { Sanity } from './sanity.js';
 import { Recovery } from './recovery.js';
@@ -110,6 +111,7 @@ class Game {
     }
     for (const p of this.pickups) if (p.mesh) { this.scene.remove(p.mesh); p.mesh.geometry?.dispose?.(); }
     for (const c of this.critters) if (c.mesh) this.scene.remove(c.mesh);
+    if (this.props) this.props.removeAll();
     if (this.infected) this.infected.removeAll();
     if (this.emergencyMesh) this.scene.remove(this.emergencyMesh);
     if (this.recovery) for (const gr of this.recovery.graves) if (gr.mesh) this.scene.remove(gr.mesh);
@@ -132,6 +134,7 @@ class Game {
     this.player = new Player(this);
     this.inv = new Inventory(this);
     this.sig = new Signature(this);
+    this.props = new Props(this);
     this.infected = new InfectedManager(this);
     this.machines = new Machines(this);
     this.director = new Director(this);
@@ -158,6 +161,7 @@ class Game {
 
     if (!this._loadedPlayerPos) this.player.spawnAt(this.world.spawnPoint());
     this.sig.scanWorld();
+    this.props.scanWorld(); // prop meshes for model-rendered blocks (gen + saved edits)
     // restore lights for player-placed torches/campfires
     for (const [k, v] of this.world.edits) {
       if (v === B.TORCH || v === B.CAMPFIRE) {
@@ -528,6 +532,7 @@ class Game {
     this.world.set(x, y, z, id);
     this.blockHp.delete(`${x},${y},${z}`); // fresh block, fresh HP
     this.sig.onBlockChanged(x, y, z, id);
+    this.props.onBlockChanged(x, y, z, id);
     this.audio.place();
     const def = BLOCKS[id];
     if (def.machine) {
@@ -551,6 +556,7 @@ class Game {
     const key = `${x},${y},${z}`;
     this.blockHp.delete(key);
     this.sig.onBlockChanged(x, y, z, B.AIR);
+    this.props.onBlockChanged(x, y, z, B.AIR);
     this.refreshBlockLight(x, y, z, B.AIR);
     if (BLOCKS[id]?.machine) this.machines.remove(x, y, z);
     if (id === B.FURNACE) {
@@ -626,7 +632,9 @@ class Game {
       case 'door': {
         const open = hit.id === B.DOOR_OPEN;
         if (open && this.wouldCollide(hit.x, hit.y, hit.z)) { this.toast('Something is in the doorway.'); return; }
-        this.world.set(hit.x, hit.y, hit.z, open ? B.DOOR : B.DOOR_OPEN);
+        const newId = open ? B.DOOR : B.DOOR_OPEN;
+        this.world.set(hit.x, hit.y, hit.z, newId);
+        this.props.onBlockChanged(hit.x, hit.y, hit.z, newId); // swing the slab
         this.audio.place();
         return;
       }
@@ -1085,6 +1093,7 @@ class Game {
     this.player.update(dt);
     this.sig.update(dt);
     this.machines.update(dt);
+    this.props.update(dt);
     this.updateFurnaces(dt);
     this.infected.update(dt);
     this.director.update(dt, this.dayFrac);
@@ -1108,9 +1117,20 @@ class Game {
       if (this.sanity.sporeExposure() > 0.05) this.audio.cystClick();
     }
 
+    // discovering the buried lab (valley recovery §14 + objective)
+    if (!this.valleyFlags.has('labFound') && this.world.poi.lab) {
+      const L = this.world.poi.lab;
+      if (Math.abs(this.player.pos.x - L.x) < 8 && Math.abs(this.player.pos.z - L.z) < 8
+        && Math.abs(this.player.pos.y - L.y) < 5) {
+        this.addValley('labFound');
+        this.toast('A Project Lazarus site. Catalog what remains.', 'important');
+      }
+    }
+
     // generator ambience
     let genRunning = false;
     for (const m of this.machines.map.values()) if (m && m.type === 'generator' && m.running) genRunning = true;
+    if (genRunning && !this.unlocks.genRan) this.unlocks.genRan = true; // persisted via save
     const nearGen = genRunning && [...this.machines.map.values()].some(m => m && m.type === 'generator' && m.running &&
       Math.hypot(m.x - this.player.pos.x, m.z - this.player.pos.z) < 14);
     this.audio.setHum(nearGen, 0.05);
@@ -1144,6 +1164,7 @@ class Game {
       this.hud.updateSigPanel();
       this.hud.updateRecovery();
       this.hud.updateSanityFx();
+      this.hud.updateObjectives();
     }
 
     // autosave

@@ -3,6 +3,15 @@ import { PLAYER, BLOCKS, B } from './config.js';
 
 // First-person controller: pointer-lock look, WASD move, AABB voxel collision,
 // and a DDA raycast for break/place/interact targeting.
+
+// Rotate a local movement input (mx = right, mz = back) into world space by
+// yaw. Must agree with forwardVec(): local -Z maps to (-sin yaw, -cos yaw).
+// Pure — unit-tested headlessly in test/movement.test.js.
+export function moveBasis(mx, mz, yaw) {
+  const s = Math.sin(yaw), c = Math.cos(yaw);
+  return { x: mx * c + mz * s, z: -mx * s + mz * c };
+}
+
 export class Player {
   constructor(game) {
     this.game = game;
@@ -80,11 +89,8 @@ export class Player {
     if (this.keys['d']) mx += 1;
     const len = Math.hypot(mx, mz) || 1;
     mx /= len; mz /= len;
-    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
-    // forward = -z rotated by yaw
-    const wx = mx * cos - mz * sin;
-    const wz = mx * sin + mz * cos;
-    const targetVx = wx * speed, targetVz = wz * speed;
+    const w = moveBasis(mx, mz, this.yaw);
+    const targetVx = w.x * speed, targetVz = w.z * speed;
     // smooth accel
     const accel = this.onGround ? 14 : 4;
     this.vel.x += (targetVx - this.vel.x) * Math.min(1, accel * dt);

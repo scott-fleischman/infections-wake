@@ -247,9 +247,9 @@ export class Machines {
     const cfg = MACHINES.turret;
     if (m.heat > 0) m.heat = Math.max(0, m.heat - cfg.heatCool * dt);
     if (m.overheat && m.heat < cfg.heatMax * 0.4) m.overheat = false;
-    if (!running || m.overheat || m.ammo <= 0) return;
-    if (m.cd > 0) return;
-    // acquire nearest infected in range with line of sight
+    if (!running) { m._aim = null; return; }
+    // acquire nearest infected in range with line of sight — done every frame
+    // (even while cooling down) so the visual head tracks its target
     const origin = new THREE.Vector3(m.x + 0.5, m.y + 0.9, m.z + 0.5);
     let best = null, bestD = cfg.range;
     for (const inf of this.game.infected.list) {
@@ -260,6 +260,8 @@ export class Machines {
       if (clear < 0.95) continue; // needs true line of sight (§9.4 blocked LOS limits turrets)
       best = inf; bestD = d;
     }
+    m._aim = best ? { x: best.pos.x, y: best.pos.y + 0.8, z: best.pos.z } : null;
+    if (m.overheat || m.ammo <= 0 || m.cd > 0) return;
     if (best) {
       best.takeHit(cfg.dmg, true);
       m.ammo--; m.cd = cfg.fireRate; m.heat += cfg.heatPerShot;

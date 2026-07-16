@@ -2,6 +2,7 @@ import { itemDef } from './inventory.js';
 import { BESTIARY } from './lore.js';
 import { STRAINS, RECIPES, SANITY, TIME } from './config.js';
 import { el, row, gauge, line, clear } from './dom.js';
+import { makeIcon } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -176,21 +177,40 @@ export class HUD {
   }
 
   // ---------- hotbar / inventory ----------
-  iconFor(id) {
-    const def = itemDef(id);
-    const c = document.createElement('canvas');
-    c.width = c.height = 26;
-    c.className = 'icon';
-    const ctx = c.getContext('2d');
-    const col = '#' + (def?.color ?? 0x888888).toString(16).padStart(6, '0');
-    ctx.fillStyle = col;
-    if (def?.tool === 'pick') { ctx.fillRect(4, 4, 18, 5); ctx.fillRect(11, 4, 4, 18); }
-    else if (def?.tool === 'axe') { ctx.fillRect(4, 4, 12, 10); ctx.fillRect(11, 6, 4, 16); }
-    else if (def?.tool === 'shovel') { ctx.fillRect(9, 3, 8, 9); ctx.fillRect(11, 3, 4, 19); }
-    else if (def?.tool === 'sword') { ctx.fillRect(11, 2, 4, 16); ctx.fillRect(7, 16, 12, 4); }
-    else if (def?.block != null) { ctx.fillRect(3, 3, 20, 20); ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(3, 3, 20, 6); }
-    else { ctx.beginPath(); ctx.arc(13, 13, 8, 0, Math.PI * 2); ctx.fill(); }
-    return c;
+  iconFor(id) { return makeIcon(itemDef(id), 26); }
+
+  // ---------- objectives (discoverability, not a tutorial wall) ----------
+  objectivesList() {
+    const g = this.game;
+    const anyTool = g.inv.slots.some(s => s && itemDef(s.id)?.tool);
+    const beaconReady = [...g.machines.map.values()]
+      .some(m => m && m.type === 'beacon' && m.registered && m.charges > 0);
+    const cataloged = g.story.entries.filter(e => !e.synth).length;
+    return [
+      { label: 'Craft a stone tool', done: anyTool || g.tiers.has('iron') },
+      { label: 'Survive a night assault', done: g.valleyFlags.has('firstAssault') },
+      { label: 'Smelt iron at a furnace', done: g.tiers.has('iron') },
+      { label: 'Run a fuel generator', done: !!g.unlocks.genRan },
+      { label: 'Keep a charged beacon registered', done: beaconReady },
+      { label: 'Find the buried lab (far plains)', done: g.valleyFlags.has('labFound') || cataloged > 0 },
+      { label: 'Catalog all 3 lab archives', done: cataloged >= 3 },
+      { label: 'Purge the colony host', done: g.bossDead },
+    ];
+  }
+
+  updateObjectives() {
+    const list = this.objectivesList();
+    const done = list.filter(o => o.done).length;
+    $('obj-progress').textContent = `${done}/${list.length}`;
+    const wrap = $('objectives');
+    clear(wrap);
+    for (const o of list.filter(o => o.done).slice(-1)) {         // latest achievement
+      wrap.appendChild(el('div', 'obj done', '■ ' + o.label));
+    }
+    for (const o of list.filter(o => !o.done).slice(0, 3)) {      // next three goals
+      wrap.appendChild(el('div', 'obj', '□ ' + o.label));
+    }
+    if (done === list.length) wrap.appendChild(el('div', 'obj done', 'The valley remembers you.'));
   }
 
   slotEl(s, selected) {

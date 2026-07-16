@@ -41,6 +41,23 @@ const FACES = [
 
 const AO_LEVELS = [0.5, 0.68, 0.84, 1.0];
 
+// The block layout of one tree with the given trunk height, as offsets from
+// the ground cell. Shared by worldgen (stamping) and the gallery (preview) —
+// deterministic given `th`, so extracting it does not disturb gen RNG order.
+export function treeShape(th) {
+  const blocks = [];
+  for (let y = 1; y <= th; y++) blocks.push({ dx: 0, dy: y, dz: 0, id: B.LOG });
+  for (let dx = -2; dx <= 2; dx++)
+    for (let dz = -2; dz <= 2; dz++)
+      for (let dy = 0; dy <= 2; dy++) {
+        if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+        if (dy === 2 && (Math.abs(dx) > 1 || Math.abs(dz) > 1)) continue;
+        if (dx === 0 && dz === 0 && th - 1 + dy <= th) continue; // trunk occupies
+        blocks.push({ dx, dy: th - 1 + dy, dz, id: B.LEAVES });
+      }
+  return blocks;
+}
+
 export class World {
   constructor(seed) {
     this.seed = seed;
@@ -112,7 +129,9 @@ export class World {
 
   // ---------------- Generation ----------------
   generate() {
-    const s = this.seed;
+    // hashed numeric seed — passing the raw string coerces to 0 inside the
+    // noise hashers and every string seed would share one terrain shape
+    const s = this.rng.seed;
     for (let x = 0; x < SIZE_X; x++) {
       for (let z = 0; z < SIZE_Z; z++) {
         // Height: forest rolling toward flat plains at high x.
@@ -154,7 +173,7 @@ export class World {
   }
 
   carveCaves() {
-    const s = this.seed + 4001;
+    const s = this.rng.seed + 4001;
     for (let x = 1; x < SIZE_X - 1; x++) {
       for (let z = 1; z < SIZE_Z - 1; z++) {
         const surf = this.surfaceY(x, z);
@@ -206,16 +225,11 @@ export class World {
         const surf = this.surfaceY(x, z);
         if (this.get(x, surf, z) !== B.GRASS) continue;
         const th = rng.int(4, 6);
-        for (let y = 1; y <= th; y++) this._set(x, surf + y, z, B.LOG);
-        const top = surf + th;
-        for (let dx = -2; dx <= 2; dx++)
-          for (let dz = -2; dz <= 2; dz++)
-            for (let dy = 0; dy <= 2; dy++) {
-              if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
-              const lx = x + dx, ly = top - 1 + dy, lz = z + dz;
-              if (dy === 2 && (Math.abs(dx) > 1 || Math.abs(dz) > 1)) continue;
-              if (this.get(lx, ly, lz) === B.AIR) this._set(lx, ly, lz, B.LEAVES);
-            }
+        for (const b of treeShape(th)) {
+          const bx = x + b.dx, by = surf + b.dy, bz = z + b.dz;
+          // leaves only fill air; trunk always stamps (matches original gen)
+          if (b.id === B.LOG || this.get(bx, by, bz) === B.AIR) this._set(bx, by, bz, b.id);
+        }
       }
     }
   }
@@ -401,6 +415,7 @@ export class World {
           if (id === B.AIR) continue;
           const def = BLOCKS[id];
           if (!def || def.render === false) continue;
+          if (def.model) continue; // rendered as a detailed prop mesh (props.js)
           const target = (def.transparent || def.liquid) ? tr : op;
           if (def.slim) { this.emitSlim(target, x, y, z, id, def); continue; }
           for (const face of FACES) {

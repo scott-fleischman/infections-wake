@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { STRAINS, BLOCKS, B, WORLD, SCORE } from './config.js';
+import { buildInfectedMesh } from './models.js';
 
 let _uid = 1;
 
@@ -25,30 +26,13 @@ export class Infected {
   }
 
   buildMesh() {
-    const s = this.s;
-    const g = new THREE.Group();
-    const col = new THREE.Color(s.color);
-    const bodyMat = new THREE.MeshLambertMaterial({ color: col });
-    const scale = s.scale;
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.6 * scale, 1.1 * scale, 0.4 * scale), bodyMat);
-    body.position.y = 0.55 * scale + 0.2;
-    g.add(body);
-    const headMat = new THREE.MeshLambertMaterial({ color: col.clone().offsetHSL(0, 0, -0.08) });
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.42 * scale, 0.42 * scale, 0.42 * scale), headMat);
-    head.position.y = 1.1 * scale + 0.35;
-    g.add(head);
-    // glowing eyes so the "head turns toward stimulus" reads clearly
-    const eyeMat = new THREE.MeshBasicMaterial({ color: this.s.boss ? 0xff5a3a : 0xd94f4f });
-    const eyeGeo = new THREE.BoxGeometry(0.08 * scale, 0.08 * scale, 0.05 * scale);
-    for (const ex of [-0.1, 0.1]) {
-      const eye = new THREE.Mesh(eyeGeo, eyeMat);
-      eye.position.set(ex * scale, 1.1 * scale + 0.37, -0.22 * scale);
-      g.add(eye);
-    }
-    this.mesh = g;
+    // distinct per-strain silhouette (models.js — shared with the gallery)
+    const { group, head, mats } = buildInfectedMesh(this.strainKey);
+    this.mesh = group;
     this.headMesh = head;
-    this.bodyMat = bodyMat;
-    this.game.scene.add(g);
+    this.bodyMats = mats;
+    this.bodyMat = mats[0];
+    this.game.scene.add(group);
   }
 
   groundY(x, z) {
@@ -255,9 +239,13 @@ export class Infected {
   }
 
   flash() {
-    this.bodyMat.emissive = new THREE.Color(0x882222);
-    this.bodyMat.emissiveIntensity = 1;
-    setTimeout(() => { if (this.bodyMat) { this.bodyMat.emissive = new THREE.Color(0x000000); } }, 90);
+    for (const m of (this.bodyMats || [this.bodyMat])) {
+      m.emissive = new THREE.Color(0x882222);
+      m.emissiveIntensity = 1;
+    }
+    setTimeout(() => {
+      for (const m of (this.bodyMats || [this.bodyMat])) if (m) m.emissive = new THREE.Color(0x000000);
+    }, 90);
   }
 
   die() {
@@ -268,7 +256,10 @@ export class Infected {
 
   remove() {
     this.game.scene.remove(this.mesh);
-    this.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    this.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose?.();
+    });
     this.dead = true;
   }
 }

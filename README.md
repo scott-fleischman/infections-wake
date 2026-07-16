@@ -16,9 +16,16 @@ dangerous?*
 ```bash
 npm install
 npm run dev      # then open http://localhost:5173
+npm test         # headless test suite (node --test, no browser needed)
 ```
 
 Chromium-based browsers and Firefox work; WebGL required.
+
+**Model archive:** `/gallery.html` (linked from the dev server root, e.g.
+`http://localhost:5173/gallery.html`) is a viewer for every model in the
+game — machines, infected specimens, blocks, item icons, and seeded tree
+generation — rendered with the exact same builders the game uses
+(`src/models.js`, `treeShape()`), on a drag-to-rotate turntable.
 
 ## Controls
 
@@ -67,6 +74,10 @@ Systems map 1:1 onto the spec's module list (§23):
 | --- | --- |
 | `src/config.js` | All data-driven tunables: blocks, items, recipes, machines, strain sense profiles, threat compositions (§22) |
 | `src/world.js` | Chunked voxel world, generation, meshing with AO + sky-light shading |
+| `src/models.js` | Model registry: machine props, infected bodies, block display meshes — shared by game + gallery |
+| `src/props.js` | In-world prop lifecycle + animation (turret aim, flywheels, fire flicker) |
+| `src/icons.js` | Canvas item-icon painter — shared by HUD + gallery |
+| `src/gallery.js` | `/gallery.html` model archive viewer |
 | `src/player.js` | First-person controller, AABB physics, DDA raycast |
 | `src/signature.js` | The signature field — emitters, propagation, sampling (§5) |
 | `src/infected.js` | Gradient-following infected AI; three roles + colony host (§12) |
@@ -83,3 +94,13 @@ Boundary rules from §23.1 hold: infected read the world only through the
 signature service; the director *requests* spawns that are validated against
 sky-exposed routes (nothing appears inside a sealed room); sanity falsifies
 presentation only, never simulation state.
+
+## Testing
+
+`npm test` runs 72 headless tests (Node's built-in runner, no browser):
+movement math, worldgen determinism and structure placement, signature
+falloff/wall attenuation, the power solver, the recovery ladder, crafting,
+the threat director, and an integration test where a machine eater
+gradient-follows an electrical emitter in pure Node. The sim layer never
+touches the DOM, so most behavior is checkable without playtesting;
+the browser is only needed to validate rendering and input.

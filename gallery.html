@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Infection's Wake — Model Archive</title>
+  <link rel="stylesheet" href="/src/gallery.css" />
+</head>
+<body>
+  <header id="g-head">
+    <div class="g-title">PROJECT LAZARUS <span class="g-sub">— FABRICATION &amp; SPECIMEN ARCHIVE</span></div>
+    <div class="g-meta">MODEL VIEWER · drag to rotate · scroll to zoom</div>
+    <a class="g-back" href="/">◄ RETURN TO THE VALLEY</a>
+  </header>
+
+  <aside id="g-side">
+    <nav id="g-cats"></nav>
+    <div id="g-list"></div>
+  </aside>
+
+  <main id="g-main">
+    <div id="g-viewport"></div>
+    <div id="g-icons" class="hidden"></div>
+
+    <div id="g-card" class="g-panel">
+      <div id="g-card-tag"></div>
+      <h2 id="g-card-name"></h2>
+      <p id="g-card-desc"></p>
+      <div id="g-card-stats"></div>
+    </div>
+
+    <div id="g-tree-controls" class="g-panel hidden">
+      <div class="g-panel-title">GROWTH SEED</div>
+      <div class="g-tree-row">
+        <input id="g-seed" type="text" value="wake-042" spellcheck="false" />
+        <button id="g-grow" class="g-btn">GROW</button>
+        <button id="g-random" class="g-btn">RANDOM</button>
+      </div>
+      <div class="g-hint">Same seed → same trees. This is the exact generator the world uses.</div>
+    </div>
+
+    <div id="g-scan"></div>
+  </main>
+
+  <script type="module" src="/src/gallery.js"></script>
+</body>
+</html>

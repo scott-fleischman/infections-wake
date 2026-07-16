@@ -66,20 +66,23 @@ export const BLOCKS = {
   [B.IRON_BLOCK]: { name: 'Iron plating', solid: true, opaque: true, col: 0x9aa0a6, accent: 0xcfd3d6, hardness: 4.0, tool: 'pick', drop: B.IRON_BLOCK, place: true, armor: 3, metal: true },
   [B.GLASS]:      { name: 'Window', solid: true, opaque: false, transparent: true, col: 0x9fd4e0, hardness: 0.4, drop: null, place: true },
 
-  [B.BENCH]:      { name: 'Crafting bench', solid: true, opaque: true, col: [0x8a6a3e,0x6b4e2e,0x6b4e2e], hardness: 1.0, drop: B.BENCH, place: true, interact: 'bench' },
-  [B.CAMPFIRE]:   { name: 'Campfire', solid: true, opaque: false, col: 0xd8863a, light: 11, hardness: 0.4, drop: B.CAMPFIRE, place: true, interact: 'campfire', emits: { heat: 0.6, light: 0.9 } },
-  [B.FURNACE]:    { name: 'Furnace', solid: true, opaque: true, col: [0x585858,0x4a4a4a,0x3a3a3a], hardness: 2.6, drop: B.FURNACE, place: true, interact: 'furnace' },
-  [B.DOOR]:       { name: 'Door', solid: true, opaque: true, col: 0x7a5a30, hardness: 1.2, drop: B.DOOR, place: true, interact: 'door', armor: 1 },
-  [B.DOOR_OPEN]:  { name: 'Door', solid: false, opaque: false, col: 0x7a5a30, hardness: 1.2, drop: B.DOOR, interact: 'door' },
-  [B.BED]:        { name: 'Bed', solid: true, opaque: false, col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: B.BED, place: true, interact: 'bed' },
+  // `model:` — rendered as a detailed prop mesh (models.js) instead of a cube;
+  // these must be non-opaque so the mesher still draws neighbor faces behind
+  // them. `senseOpaque:` — still blocks signatures/sight like a wall (§5).
+  [B.BENCH]:      { name: 'Crafting bench', solid: true, opaque: false, model: 'bench', col: [0x8a6a3e,0x6b4e2e,0x6b4e2e], hardness: 1.0, drop: B.BENCH, place: true, interact: 'bench' },
+  [B.CAMPFIRE]:   { name: 'Campfire', solid: true, opaque: false, model: 'campfire', col: 0xd8863a, light: 11, hardness: 0.4, drop: B.CAMPFIRE, place: true, interact: 'campfire', emits: { heat: 0.6, light: 0.9 } },
+  [B.FURNACE]:    { name: 'Furnace', solid: true, opaque: false, senseOpaque: true, model: 'furnace', col: [0x585858,0x4a4a4a,0x3a3a3a], hardness: 2.6, drop: B.FURNACE, place: true, interact: 'furnace' },
+  [B.DOOR]:       { name: 'Door', solid: true, opaque: false, senseOpaque: true, model: 'door', col: 0x7a5a30, hardness: 1.2, drop: B.DOOR, place: true, interact: 'door', armor: 1 },
+  [B.DOOR_OPEN]:  { name: 'Door', solid: false, opaque: false, model: 'door', col: 0x7a5a30, hardness: 1.2, drop: B.DOOR, interact: 'door' },
+  [B.BED]:        { name: 'Bed', solid: true, opaque: false, model: 'bed', col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: B.BED, place: true, interact: 'bed' },
 
-  [B.GENERATOR]:  { name: 'Fuel generator', solid: true, opaque: true, col: [0x3a4048,0x2f353c,0x24282e], accent: 0xe0a83e, hardness: 3.2, drop: B.GENERATOR, place: true, interact: 'machine', machine: 'generator' },
+  [B.GENERATOR]:  { name: 'Fuel generator', solid: true, opaque: false, model: 'generator', col: [0x3a4048,0x2f353c,0x24282e], accent: 0xe0a83e, hardness: 3.2, drop: B.GENERATOR, place: true, interact: 'machine', machine: 'generator' },
   [B.WIRE]:       { name: 'Power cable', solid: false, opaque: false, col: 0xc07a2a, hardness: 0.3, drop: B.WIRE, place: true, wire: true, transparent: true, slim: 0.12 },
-  [B.LAMP]:       { name: 'Powered lamp', solid: true, opaque: false, col: 0x2a2e33, accent: 0xffe9a8, hardness: 0.8, drop: B.LAMP, place: true, machine: 'lamp' },
-  [B.DRILL]:      { name: 'Mining drill', solid: true, opaque: true, col: [0x4a4e54,0x3a3e44,0x2f333a], accent: 0xc9524a, hardness: 3.2, drop: B.DRILL, place: true, interact: 'machine', machine: 'drill' },
-  [B.TURRET]:     { name: 'Warm-body turret', solid: true, opaque: true, col: [0x44484f,0x393d44,0x2f333a], accent: 0x74c7c4, hardness: 3.2, drop: B.TURRET, place: true, interact: 'machine', machine: 'turret' },
-  [B.BEACON]:     { name: 'Field recovery beacon', solid: true, opaque: true, col: [0x3a4a44,0x2f3c38,0x24302c], accent: 0x7fae62, hardness: 3.0, drop: B.BEACON, place: true, interact: 'machine', machine: 'beacon' },
-  [B.CRADLE]:     { name: 'Lazarus cradle', solid: true, opaque: true, col: [0x40404a,0x34343e,0x282832], accent: 0x9d8fd4, hardness: 4.0, place: true, interact: 'machine', machine: 'cradle' },
+  [B.LAMP]:       { name: 'Powered lamp', solid: true, opaque: false, model: 'lamp', col: 0x2a2e33, accent: 0xffe9a8, hardness: 0.8, drop: B.LAMP, place: true, machine: 'lamp' },
+  [B.DRILL]:      { name: 'Mining drill', solid: true, opaque: false, model: 'drill', col: [0x4a4e54,0x3a3e44,0x2f333a], accent: 0xc9524a, hardness: 3.2, drop: B.DRILL, place: true, interact: 'machine', machine: 'drill' },
+  [B.TURRET]:     { name: 'Warm-body turret', solid: true, opaque: false, model: 'turret', col: [0x44484f,0x393d44,0x2f333a], accent: 0x74c7c4, hardness: 3.2, drop: B.TURRET, place: true, interact: 'machine', machine: 'turret' },
+  [B.BEACON]:     { name: 'Field recovery beacon', solid: true, opaque: false, model: 'beacon', col: [0x3a4a44,0x2f3c38,0x24302c], accent: 0x7fae62, hardness: 3.0, drop: B.BEACON, place: true, interact: 'machine', machine: 'beacon' },
+  [B.CRADLE]:     { name: 'Lazarus cradle', solid: true, opaque: false, senseOpaque: true, model: 'cradle', col: [0x40404a,0x34343e,0x282832], accent: 0x9d8fd4, hardness: 4.0, place: true, interact: 'machine', machine: 'cradle' },
 
   [B.LAB_WALL]:   { name: 'Lab bulkhead', solid: true, opaque: true, col: [0x5a6066,0x4e545a,0x42484e], hardness: Infinity },
   [B.LAB_FLOOR]:  { name: 'Lab plating', solid: true, opaque: true, col: [0x484e54,0x3e444a,0x363c42], hardness: Infinity },
@@ -90,11 +93,12 @@ export const BLOCKS = {
   [B.NEST]:       { name: 'Infected nest', solid: true, opaque: true, col: [0x5a4a5a,0x4a3c4a,0x3a2e3a], accent: 0xc06a8a, hardness: 2.0, drop: null, emits: { spores: 0.7, blood: 0.3 } },
 
   // Archives are indestructible: cataloged, never consumed or lost (§16.1).
-  [B.ARCHIVE_1]:  { name: 'Ward Seven fragment', solid: false, opaque: false, transparent: true, col: 0xe8d8a8, light: 8, hardness: Infinity, archive: 1, interact: 'archive', slim: 0.28 },
-  [B.ARCHIVE_2]:  { name: 'Ventilation incident log', solid: false, opaque: false, transparent: true, col: 0xd8e0a8, light: 8, hardness: Infinity, archive: 2, interact: 'archive', slim: 0.28 },
-  [B.ARCHIVE_3]:  { name: "Venn's reservoir protocol", solid: false, opaque: false, transparent: true, col: 0xe8b878, light: 8, hardness: Infinity, archive: 3, interact: 'archive', slim: 0.28 },
+  // (`slim` is kept alongside `model` so the raycaster still targets them.)
+  [B.ARCHIVE_1]:  { name: 'Ward Seven fragment', solid: false, opaque: false, transparent: true, col: 0xe8d8a8, light: 8, hardness: Infinity, archive: 1, interact: 'archive', slim: 0.28, model: 'archive' },
+  [B.ARCHIVE_2]:  { name: 'Ventilation incident log', solid: false, opaque: false, transparent: true, col: 0xd8e0a8, light: 8, hardness: Infinity, archive: 2, interact: 'archive', slim: 0.28, model: 'archive' },
+  [B.ARCHIVE_3]:  { name: "Venn's reservoir protocol", solid: false, opaque: false, transparent: true, col: 0xe8b878, light: 8, hardness: Infinity, archive: 3, interact: 'archive', slim: 0.28, model: 'archive' },
 
-  [B.TORCH]:      { name: 'Torch', solid: false, opaque: false, transparent: true, col: 0xffb347, light: 12, hardness: 0.1, drop: B.TORCH, place: true, emits: { light: 0.4, heat: 0.15 }, slim: 0.1 },
+  [B.TORCH]:      { name: 'Torch', solid: false, opaque: false, transparent: true, col: 0xffb347, light: 12, hardness: 0.1, drop: B.TORCH, place: true, emits: { light: 0.4, heat: 0.15 }, slim: 0.1, model: 'torch' },
 };
 
 // --- Item registry -------------------------------------------------------

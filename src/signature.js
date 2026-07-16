@@ -88,7 +88,9 @@ export class Signature {
       const t = i / steps;
       const x = Math.floor(ax + dx * t), y = Math.floor(ay + dy * t), z = Math.floor(az + dz * t);
       const d = BLOCKS[this.game.world.get(x, y, z)];
-      if (d && d.opaque) walls++;
+      // senseOpaque: prop-rendered blocks (doors, furnaces) that still block
+      // senses like a wall even though the mesher treats them as see-through
+      if (d && (d.opaque || d.senseOpaque)) walls++;
     }
     return Math.pow(SIGNATURE.wallAttenuation, Math.min(walls, 4));
   }
