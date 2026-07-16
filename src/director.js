@@ -62,6 +62,7 @@ export class Director {
     this.assaultActive = true;
     this.assaultDoneForNight = true;
     this.remaining = spawned;
+    this._bannerShown = true;
     g.hud.showAssaultBanner(true);
     g.toast(`MAJOR ASSAULT — ${this.forecast.tag}`, 'bad');
     g.audio?.assault();
@@ -70,6 +71,7 @@ export class Director {
   endAssault(cleared) {
     if (!this.assaultActive) return;
     this.assaultActive = false;
+    this._bannerShown = false;
     this.game.hud.showAssaultBanner(false);
     if (cleared) {
       this.game.toast('Assault repelled. The valley quiets.', 'important');
@@ -94,6 +96,7 @@ export class Director {
 
     // Assault bookkeeping.
     if (this.assaultActive) {
+      if (!this._bannerShown) { g.hud.showAssaultBanner(true); this._bannerShown = true; }
       this.remaining = g.infected.countReal(true);
       g.hud.updateAssaultRemaining(this.remaining);
       if (this.remaining <= 0) this.endAssault(true);
@@ -133,6 +136,15 @@ export class Director {
 
   levelName() { return LEVEL_NAMES[this.forecast ? this.forecast.level : 0]; }
 
-  serialize() { return { assaultDone: this.assaultDoneForNight, active: this.assaultActive }; }
-  load(d) { if (d) { this.assaultDoneForNight = d.assaultDone; } }
+  serialize() {
+    return { assaultDone: this.assaultDoneForNight, active: this.assaultActive, forecast: this.forecast };
+  }
+  load(d) {
+    if (!d) return;
+    this.assaultDoneForNight = d.assaultDone;
+    this.forecast = d.forecast || null;
+    // a save made mid-assault resumes the assault (banner re-shown on update)
+    this.assaultActive = !!d.active;
+    this._bannerShown = false;
+  }
 }

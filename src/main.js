@@ -103,16 +103,25 @@ class Game {
   }
 
   setupWorld(seed, hardcore, data) {
-    // clear any prior scene content
-    if (this.world) this.scene.remove(this.world.group);
-    for (const p of this.pickups) if (p.mesh) this.scene.remove(p.mesh);
+    // clear any prior scene content (meshes AND GPU resources)
+    if (this.world) {
+      this.scene.remove(this.world.group);
+      this.world.group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    }
+    for (const p of this.pickups) if (p.mesh) { this.scene.remove(p.mesh); p.mesh.geometry?.dispose?.(); }
     for (const c of this.critters) if (c.mesh) this.scene.remove(c.mesh);
     if (this.infected) this.infected.removeAll();
     if (this.emergencyMesh) this.scene.remove(this.emergencyMesh);
+    if (this.recovery) for (const gr of this.recovery.graves) if (gr.mesh) this.scene.remove(gr.mesh);
+    for (const e of this.effects) this.scene.remove(e.mesh);
     if (this.boss) this.boss = null;
     this.lights.clear();
     this.effects = [];
     this.furnaces = new Map();
+    this.blockHp = new Map();
+    this._sleeping = false;
+    this.hud.showAssaultBanner(false);
+    $('night-fade').style.opacity = '0';
 
     this.seed = seed;
     this.rng = new RNG(seed);
@@ -157,6 +166,8 @@ class Game {
       }
     }
     this.spawnPickups();
+    for (const pk of (this._pendingDropped || [])) this.dropItemAt({ x: pk.x, y: pk.y - 0.4, z: pk.z }, pk.item, pk.n);
+    this._pendingDropped = null;
     this.spawnCritters();
     this.buildEmergencyPad();
     this.world.buildAll();
@@ -182,6 +193,7 @@ class Game {
 
   loadInto(d) {
     this.t = d.t;
+    this.day = Math.floor(this.t / TIME.DAY_LENGTH) + 1; // threat scaling continuity
     this.score = d.score || 0;
     this.valleyFlags = new Set(d.valleyFlags || []);
     this.tiers = new Set(d.tiers || []);
@@ -204,6 +216,20 @@ class Game {
     this.story.load(d.story);
     this.recovery.load(d.recovery);
     this.infected.load(d.infected || []);
+    // a colony host in the saved list IS the boss — rebind so it doesn't respawn
+    const host = this.infected.list.find(i => i.strainKey === 'colony_host');
+    if (host) {
+      this.boss = host;
+      this.bossSpawned = true;
+      const hs = this.world.poi.colony.hostSpawn;
+      host.home = { x: hs.x, y: hs.y, z: hs.z };
+      for (const f of [0.75, 0.5, 0.25]) if (host.hp < host.s.hp * f) this.bossHpMarks.add(f);
+    } else if (this.bossDead) {
+      this.bossSpawned = true;
+    }
+    // dropped ground items (boss loot, spilled buffers) round-trip too;
+    // applied after spawnPickups() resets the pickup list
+    this._pendingDropped = d.dropped || [];
   }
 
   buildEmergencyPad() {
@@ -248,7 +274,11 @@ class Game {
     this.scene.add(mesh);
     const p = { x: pos.x, y: pos.y + 0.4, z: pos.z, item: id, n, mesh, idx: -1, bob: 0 };
     this.pickups.push(p);
-    if (id === 'raw_meat') this.sig.setDynamic('meat' + Math.random(), pos.x, pos.y, pos.z, { blood: 0.5 }, 9);
+    if (id === 'raw_meat') {
+      // a carcass in the open smells — the emitter dies with the pickup
+      p.sigKey = 'meat:' + (this._meatSeq = (this._meatSeq || 0) + 1);
+      this.sig.setDynamic(p.sigKey, pos.x, pos.y, pos.z, { blood: 0.5 }, 12);
+    }
     return p;
   }
 
@@ -295,8 +325,17 @@ class Game {
       if (e.button === 0) { this.onPrimary(); this.player.miningHeld = true; }
       if (e.button === 2) this.onSecondary();
     });
-    document.addEventListener('mouseup', (e) => { if (e.button === 0) this.player.miningHeld = false; });
+    document.addEventListener('mouseup', (e) => { if (e.button === 0 && this.player) this.player.miningHeld = false; });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
+    // losing focus must not leave movement/mining keys latched
+    const releaseInputs = () => {
+      if (!this.player) return;
+      this.player.keys = {};
+      this.player.sprinting = false;
+      this.player.miningHeld = false;
+    };
+    window.addEventListener('blur', releaseInputs);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releaseInputs(); });
 
     document.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
@@ -316,9 +355,10 @@ class Game {
       }
     });
     document.addEventListener('keyup', (e) => {
+      if (!this.player) return;
       const k = e.key.toLowerCase();
-      this.player.keys && (this.player.keys[k] = false);
-      if (k === 'shift' && this.player) this.player.sprinting = false;
+      this.player.keys[k] = false;
+      if (k === 'shift') this.player.sprinting = false;
     });
   }
 
@@ -464,6 +504,7 @@ class Game {
       const bd = BLOCKS[def.block];
       let tx = hit.x + hit.face[0], ty = hit.y + hit.face[1], tz = hit.z + hit.face[2];
       // torches / wires can replace air only; solid blocks must not intersect entities
+      if (!this.world.inBounds(tx, ty, tz)) return; // world.set would no-op — don't eat the item
       if (this.world.get(tx, ty, tz) !== B.AIR) return;
       if (bd.solid && this.wouldCollide(tx, ty, tz)) { this.toast('Blocked.'); return; }
       this.placeBlock(tx, ty, tz, def.block);
@@ -485,6 +526,7 @@ class Game {
 
   placeBlock(x, y, z, id) {
     this.world.set(x, y, z, id);
+    this.blockHp.delete(`${x},${y},${z}`); // fresh block, fresh HP
     this.sig.onBlockChanged(x, y, z, id);
     this.audio.place();
     const def = BLOCKS[id];
@@ -504,25 +546,48 @@ class Game {
     else this.lights.remove(key);
   }
 
+  // Shared teardown when a block cell stops being what it was (mined or breached).
+  clearBlockCell(x, y, z, id) {
+    const key = `${x},${y},${z}`;
+    this.blockHp.delete(key);
+    this.sig.onBlockChanged(x, y, z, B.AIR);
+    this.refreshBlockLight(x, y, z, B.AIR);
+    if (BLOCKS[id]?.machine) this.machines.remove(x, y, z);
+    if (id === B.FURNACE) {
+      const f = this.furnaces.get(key);
+      if (f) {
+        // stop its emitter/light and spill contents rather than voiding them
+        this.sig.removeDynamic('F' + key);
+        this.lights.remove('F' + key);
+        for (const job of f.queue) this.dropItemAt({ x: x + 0.5, y, z: z + 0.5 }, job.from, 1);
+        for (const [iid, n] of Object.entries(f.out || {})) if (n > 0) this.dropItemAt({ x: x + 0.5, y, z: z + 0.5 }, iid, n);
+        this.furnaces.delete(key);
+      }
+    }
+  }
+
   breakBlock(x, y, z, held) {
     const id = this.world.get(x, y, z);
     const def = BLOCKS[id];
     if (!def) return;
     this.world.set(x, y, z, B.AIR);
-    this.sig.onBlockChanged(x, y, z, B.AIR);
-    this.refreshBlockLight(x, y, z, B.AIR);
+    this.clearBlockCell(x, y, z, id);
     this.audio.breakBlock();
     this.inv.useToolDurability(1);
-    if (def.machine) this.machines.remove(x, y, z);
-    if (id === B.FURNACE) this.furnaces.delete(`${x},${y},${z}`);
     // drops
     const drop = this.dropFor(id);
-    if (drop) { this.inv.add(drop.id, drop.n); this.audio.pickup(); this.hud.updateHotbar(); }
-    // falling blocks above (sand/gravel)
-    const above = this.world.get(x, y + 1, z);
-    if (BLOCKS[above]?.falls) {
-      this.world.set(x, y + 1, z, B.AIR);
-      this.world.set(x, y, z, above);
+    if (drop) {
+      const overflow = this.inv.add(drop.id, drop.n);
+      if (overflow > 0) this.dropItemAt({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, drop.id, overflow);
+      this.audio.pickup(); this.hud.updateHotbar();
+    }
+    // falling blocks above (sand/gravel) — settle the whole column
+    let fy = y;
+    while (BLOCKS[this.world.get(x, fy + 1, z)]?.falls) {
+      const above = this.world.get(x, fy + 1, z);
+      this.world.set(x, fy + 1, z, B.AIR);
+      this.world.set(x, fy, z, above);
+      fy++;
     }
   }
 
@@ -560,6 +625,7 @@ class Game {
     switch (def.interact) {
       case 'door': {
         const open = hit.id === B.DOOR_OPEN;
+        if (open && this.wouldCollide(hit.x, hit.y, hit.z)) { this.toast('Something is in the doorway.'); return; }
         this.world.set(hit.x, hit.y, hit.z, open ? B.DOOR : B.DOOR_OPEN);
         this.audio.place();
         return;
@@ -605,10 +671,16 @@ class Game {
   }
 
   trySleep() {
+    if (this._sleeping) return;
     const frac = this.dayFrac;
     const night = frac >= TIME.DUSK || frac < TIME.DAWN;
     if (!night) { this.toast('You can only sleep at night.'); return; }
     if (this.director.assaultActive) { this.toast('Not during an assault.', 'bad'); return; }
+    // the forecast major assault must be faced, not slept through (§6.2, §8.3)
+    if (!this.director.assaultDoneForNight && frac >= TIME.DUSK) {
+      this.toast('The forecast says something is coming. Sleep will not come first.', 'bad');
+      return;
+    }
     // nearby threats block sleep (§8.3)
     for (const inf of this.infected.list) {
       if (!inf.isFalse && !inf.dead && inf.pos.distanceTo(this.player.pos) < 18) {
@@ -616,8 +688,12 @@ class Game {
         return;
       }
     }
+    this._sleeping = true;
     $('night-fade').style.opacity = '1';
     setTimeout(() => {
+      this._sleeping = false;
+      $('night-fade').style.opacity = '0';
+      if (this.state !== 'play') return; // died/paused/quit during the fade
       // advance to dawn
       const day0 = Math.floor(this.t / TIME.DAY_LENGTH);
       this.t = (day0 + 1) * TIME.DAY_LENGTH + TIME.DAWN * TIME.DAY_LENGTH + 1;
@@ -625,7 +701,6 @@ class Game {
       this.player.hunger = Math.max(5, this.player.hunger - 8);
       this.director.onDawn();
       this.onNewDay();
-      $('night-fade').style.opacity = '0';
       this.toast('You slept. Stability restored. A new day.', 'important');
     }, 900);
   }
@@ -644,11 +719,16 @@ class Game {
     f.queue.push({ from, to });
   }
   furnaceTake(f) {
-    let any = false;
+    let any = false, stuck = false;
     for (const [id, n] of Object.entries(f.out || {})) {
-      if (n > 0) { this.inv.add(id, n); f.out[id] = 0; any = true; }
+      if (n > 0) {
+        const overflow = this.inv.add(id, n);
+        if (overflow < n) any = true;
+        if (overflow > 0) stuck = true;
+        f.out[id] = overflow;
+      }
     }
-    this.toast(any ? 'Took furnace output.' : 'Nothing to take.');
+    this.toast(stuck ? 'Inventory full — output left in the furnace.' : any ? 'Took furnace output.' : 'Nothing to take.');
   }
   updateFurnaces(dt) {
     for (const f of this.furnaces.values()) {
@@ -695,13 +775,9 @@ class Game {
     const maxHp = (def.armor || 1) * (def.hardness || 1) * 8;
     const hp = (this.blockHp.get(key) ?? maxHp) - amount;
     if (hp <= 0) {
-      this.blockHp.delete(key);
       this.world.set(x, y, z, B.AIR);
-      this.sig.onBlockChanged(x, y, z, B.AIR);
-      this.refreshBlockLight(x, y, z, B.AIR);
-      if (def.machine) { this.machines.remove(x, y, z); this.toast(`${def.name} destroyed!`, 'bad'); }
-      else if (id === B.FURNACE) this.furnaces.delete(key);
-      else this.toast(`${def.name} breached!`, 'bad');
+      this.clearBlockCell(x, y, z, id);
+      this.toast(def.machine ? `${def.name} destroyed!` : `${def.name} breached!`, 'bad');
       this.audio.breakBlock();
     } else {
       this.blockHp.set(key, hp);
@@ -1043,6 +1119,20 @@ class Game {
     const np = this.machines.networkPower;
     this.hud.powerWarning(np.demand > np.capacity && np.demand > 0 ? `POWER SHORTFALL: ${np.demand}kW needed / ${np.capacity}kW available` : null);
 
+    // a machine panel open for a machine that no longer exists must close
+    // (destroyed while the player was reading it — no stale duplication)
+    if (this.hud.activeScreen === 'machine-screen' && this.hud.machineOpen) {
+      const m = this.hud.machineOpen;
+      const alive = m.type === 'furnace'
+        ? this.furnaces.get(`${m.x},${m.y},${m.z}`) === m
+        : this.machines.get(m.x, m.y, m.z) === m;
+      if (!alive) {
+        this.hud.closeAll();
+        this.toast('The machine is gone.', 'bad');
+        this.requestLock();
+      }
+    }
+
     // interact prompt
     this.uiTick -= dt;
     if (this.uiTick <= 0) {
@@ -1096,12 +1186,13 @@ class Game {
       }
       if (d < 0.9) {
         const overflow = this.inv.add(pk.item, pk.n);
+        if (overflow < pk.n) { this.audio.pickup(); this.hud.updateHotbar(); }
+        pk.n = overflow; // whatever didn't fit stays on the ground — no duplication
         if (overflow === 0) {
           pk.taken = true;
           if (pk.idx >= 0) this.pickupsTaken.add(pk.idx);
+          if (pk.sigKey) this.sig.removeDynamic(pk.sigKey);
           this.scene.remove(pk.mesh);
-          this.audio.pickup();
-          this.hud.updateHotbar();
         }
       }
     }

@@ -132,10 +132,22 @@ export class Machines {
         if (cap >= draw) { m.powered = true; cap -= draw; }
       }
     }
-    // direct links (no wire)
-    for (const [gen, c, out] of directLinks) {
-      const draw = MACHINES[c.type].powerDraw;
-      if (out >= draw) c.powered = true;
+    // direct links (no wire): each generator's output is a real budget too
+    const directByGen = new Map();
+    for (const [gen, c] of directLinks) {
+      if (!directByGen.has(gen)) directByGen.set(gen, []);
+      directByGen.get(gen).push(c);
+    }
+    for (const [gen, cons] of directByGen) {
+      let cap = MACHINES.generator.powerOutput;
+      totalCap += cap;
+      cons.sort((a, b) => (PRIORITY[a.type] ?? 9) - (PRIORITY[b.type] ?? 9));
+      for (const c of cons) {
+        if (c.powered) continue; // already fed by a wire network
+        const draw = MACHINES[c.type].powerDraw;
+        totalDem += draw;
+        if (cap >= draw) { c.powered = true; cap -= draw; }
+      }
     }
 
     this.networkPower = { capacity: totalCap, demand: totalDem };
@@ -277,9 +289,18 @@ export class Machines {
     this.game.toast(`Beacon charged (${m.charges}).`, 'important');
   }
   collect(m, inv) {
-    let any = false;
-    for (const [id, n] of Object.entries(m.buffer || {})) { if (n > 0) { inv.add(id, n); m.buffer[id] = 0; any = true; } }
-    if (any) this.game.toast('Collected drill output.'); else this.game.toast('Drill buffer empty.');
+    let any = false, stuck = false;
+    for (const [id, n] of Object.entries(m.buffer || {})) {
+      if (n > 0) {
+        const overflow = inv.add(id, n);   // anything that doesn't fit stays in the buffer
+        if (overflow < n) any = true;
+        if (overflow > 0) stuck = true;
+        m.buffer[id] = overflow;
+      }
+    }
+    if (stuck) this.game.toast('Inventory full — some output left in the drill.');
+    else if (any) this.game.toast('Collected drill output.');
+    else this.game.toast('Drill buffer empty.');
   }
 
   serialize() {

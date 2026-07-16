@@ -17,7 +17,8 @@ export class Recovery {
   // Evaluate the best currently-valid recovery option.
   bestOption() {
     const g = this.game;
-    // cradle
+    // cradle — steel-tier device, not craftable in the vertical slice (§24.3
+    // defers it), but the ladder honors one if a future tier places it.
     for (const m of g.machines.map.values()) {
       if (m && m.type === 'cradle' && m.core && m.running) return { kind: 'cradle', m };
     }
@@ -107,7 +108,20 @@ export class Recovery {
 
   collectGrave(grave) {
     const g = this.game;
-    for (const it of grave.items) g.inv.add(it.id, it.n);
+    const remaining = [];
+    for (const it of grave.items) {
+      const overflow = g.inv.add(it.id, it.n);
+      if (overflow > 0) remaining.push({ ...it, n: overflow });
+    }
+    if (remaining.length > 0) {
+      grave.items = remaining;
+      grave._fullWarned = grave._fullWarned || 0;
+      if (g.t - grave._fullWarned > 5) {
+        grave._fullWarned = g.t;
+        g.toast('Inventory full — part of your kit stays with the body.', 'important');
+      }
+      return;
+    }
     grave.collected = true;
     g.scene.remove(grave.mesh);
     g.toast('Recovered your kit from your body.', 'important');

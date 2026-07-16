@@ -89,9 +89,10 @@ export const BLOCKS = {
   [B.CYST]:       { name: 'Cyst film', solid: true, opaque: false, transparent: true, col: 0xa8b06a, hardness: 0.4, drop: null, emits: { spores: 0.5 } },
   [B.NEST]:       { name: 'Infected nest', solid: true, opaque: true, col: [0x5a4a5a,0x4a3c4a,0x3a2e3a], accent: 0xc06a8a, hardness: 2.0, drop: null, emits: { spores: 0.7, blood: 0.3 } },
 
-  [B.ARCHIVE_1]:  { name: 'Ward Seven fragment', solid: false, opaque: false, transparent: true, col: 0xe8d8a8, light: 8, hardness: 0.2, archive: 1, interact: 'archive', slim: 0.28 },
-  [B.ARCHIVE_2]:  { name: 'Ventilation incident log', solid: false, opaque: false, transparent: true, col: 0xd8e0a8, light: 8, hardness: 0.2, archive: 2, interact: 'archive', slim: 0.28 },
-  [B.ARCHIVE_3]:  { name: "Venn's reservoir protocol", solid: false, opaque: false, transparent: true, col: 0xe8b878, light: 8, hardness: 0.2, archive: 3, interact: 'archive', slim: 0.28 },
+  // Archives are indestructible: cataloged, never consumed or lost (§16.1).
+  [B.ARCHIVE_1]:  { name: 'Ward Seven fragment', solid: false, opaque: false, transparent: true, col: 0xe8d8a8, light: 8, hardness: Infinity, archive: 1, interact: 'archive', slim: 0.28 },
+  [B.ARCHIVE_2]:  { name: 'Ventilation incident log', solid: false, opaque: false, transparent: true, col: 0xd8e0a8, light: 8, hardness: Infinity, archive: 2, interact: 'archive', slim: 0.28 },
+  [B.ARCHIVE_3]:  { name: "Venn's reservoir protocol", solid: false, opaque: false, transparent: true, col: 0xe8b878, light: 8, hardness: Infinity, archive: 3, interact: 'archive', slim: 0.28 },
 
   [B.TORCH]:      { name: 'Torch', solid: false, opaque: false, transparent: true, col: 0xffb347, light: 12, hardness: 0.1, drop: B.TORCH, place: true, emits: { light: 0.4, heat: 0.15 }, slim: 0.1 },
 };

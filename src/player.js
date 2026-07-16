@@ -24,6 +24,9 @@ export class Player {
   spawnAt(p) {
     this.pos.set(p.x, p.y + 0.02, p.z);
     this.vel.set(0, 0, 0);
+    this._fallStart = null;   // no phantom fall damage carried across a respawn
+    this.onGround = false;
+    this.miningHeld = false;
   }
 
   get eyePos() { return new THREE.Vector3(this.pos.x, this.pos.y + PLAYER.eye, this.pos.z); }

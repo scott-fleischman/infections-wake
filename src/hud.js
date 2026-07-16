@@ -366,7 +366,7 @@ export class HUD {
       this.mkBtn(btns, 'Load ampoule', () => { g.machines.loadCharge(m, g.inv); g.hud.updateRecovery(); this.renderMachine(); });
     } else if (m.type === 'furnace') {
       body.appendChild(row('Fuel', gauge(m.fuel / 20, m.fuel.toFixed(0))));
-      body.appendChild(row('Smelting', m.jobs > 0 ? `${m.jobs} item(s)` : 'idle'));
+      body.appendChild(row('Smelting', m.queue.length > 0 ? `${m.queue.length} item(s)` : 'idle'));
       body.appendChild(row('Output', Object.entries(m.out || {}).filter(([, n]) => n > 0).map(([id, n]) => `${n}× ${itemDef(id)?.name}`).join(', ') || '—'));
       note('Burns coal or logs. Smelts raw iron into ingots; cooks meat. A furnace is warm — warmth is a signature.');
       this.mkBtn(btns, 'Add fuel', () => { g.furnaceAddFuel(m); this.renderMachine(); });

@@ -36,6 +36,8 @@ export const SaveStore = {
         recovery: game.recovery.serialize(),
         infected: game.infected.serialize(),
         pickupsTaken: [...game.pickupsTaken],
+        dropped: game.pickups.filter(p => p.idx === -1)
+          .map(p => ({ x: p.x, y: p.y, z: p.z, item: p.item, n: p.n })),
       };
       localStorage.setItem(KEY, JSON.stringify(data));
       return true;

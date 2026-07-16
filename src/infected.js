@@ -82,7 +82,9 @@ export class Infected {
     // Direct line of sight to a close player overrides gradient (sensed living target).
     if (dToPlayer < 18) {
       const clear = this.game.sig.wallAtten(this.pos.x, this.pos.y + 1, this.pos.z, p.pos.x, p.pos.y + 1, p.pos.z);
-      if (clear > 0.5 || dToPlayer < 4) {
+      // direct sight requires a truly clear line (one wall attenuates to 0.55);
+      // very close contact is felt regardless
+      if (clear > 0.7 || dToPlayer < 4) {
         this.target = { x: p.pos.x, y: p.pos.y, z: p.pos.z };
         this.targetIsPlayer = true;
         this.state = 'pursue';
