@@ -94,9 +94,28 @@ export class Inventory {
     return false;
   }
 
+  // Armor is passive while carried (§11.1 combat branch): absorb a fraction of
+  // a hit and take durability wear. Returns the absorb fraction or 0.
+  wearArmor(amount) {
+    for (let i = 0; i < this.size; i++) {
+      const s = this.slots[i];
+      if (!s) continue;
+      const def = itemDef(s.id);
+      if (!def || !def.armor) continue;
+      s.dur = (s.dur ?? def.dur) - amount;
+      if (s.dur <= 0) {
+        this.slots[i] = null;
+        this.game.toast(`${def.name} gave out.`, 'important');
+      }
+      return def.armor;
+    }
+    return 0;
+  }
+
   craft(recipe) {
     if (!this.has(recipe.cost)) return false;
     if (recipe.tierUnlock && !this.game.tiers.has(recipe.tierUnlock)) return false;
+    if (recipe.needsUnlock && !this.game.unlocks[recipe.needsUnlock]) return false;
     for (const [id, n] of Object.entries(recipe.cost)) this.remove(id, n);
     for (const [id, n] of Object.entries(recipe.out)) {
       const overflow = this.add(id, n);

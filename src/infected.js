@@ -84,6 +84,8 @@ export class Infected {
       if (key !== this._targetKey) { this._targetKey = key; this._bestD = Infinity; this._stuckT = 0; }
       this.target = { x: stim.x, y: stim.y, z: stim.z };
       this.targetIsPlayer = stim.emitter.isPlayer === true;
+      // §5.4 frenzy: an overwhelming stimulus tips the colony into overdrive
+      this.frenzied = this.s.thresholds.frenzy != null && stim.score > this.s.thresholds.frenzy;
       this.state = stim.score > this.s.thresholds.pursue ? 'pursue' : 'investigate';
     } else {
       this.targetIsPlayer = false;
@@ -105,10 +107,54 @@ export class Infected {
     if (this.target) dir.set(this.target.x - this.pos.x, 0, this.target.z - this.pos.z);
     const horizDist = dir.length();
 
+    // §12.3 #4: retaliate against a defensive system that just hurt it
+    if (this.retaliate) {
+      this.target = { x: this.retaliate.x + 0.5, y: this.retaliate.y + 0.5, z: this.retaliate.z + 0.5 };
+      this.targetIsPlayer = false;
+      this.state = 'pursue';
+      this.retaliateT -= dt;
+      if (this.retaliateT <= 0) this.retaliate = null;
+    }
+
     // attack player if adjacent
     const dToPlayer = this.pos.distanceTo(p.pos);
     if (this.targetIsPlayer && dToPlayer < 1.4) {
       if (this.attackCd <= 0) { p.damage(this.s.dmg, this.s.name); this.attackCd = 1.0; this.lunge = 0.15; }
+    }
+
+    // §12.2 ranged infected: hold distance and spit contaminated fluid
+    if (this.s.ranged && this.target) {
+      this.spitCd = Math.max(0, (this.spitCd || 0) - dt);
+      const dTarget = this.targetIsPlayer ? dToPlayer
+        : Math.hypot(this.target.x - this.pos.x, this.target.y - (this.pos.y + 0.9), this.target.z - this.pos.z);
+      if (dTarget < this.s.ranged.range && this.spitCd <= 0) {
+        const aim = this.targetIsPlayer ? { x: p.pos.x, y: p.pos.y + 1.2, z: p.pos.z } : this.target;
+        const clear = this.game.sig.wallAtten(this.pos.x, this.pos.y + 1, this.pos.z, aim.x, aim.y, aim.z);
+        if (clear > 0.7) {
+          this.spitCd = this.s.ranged.cooldown;
+          this.facing = Math.atan2(aim.x - this.pos.x, aim.z - this.pos.z);
+          this.game.spawnSpit(this, aim);
+          this.syncMesh(dt);
+          return; // rearing to spit — no movement this frame
+        }
+      }
+      // spitters keep their distance from the player once in range
+      if (this.targetIsPlayer && dToPlayer < this.s.ranged.range * 0.6) {
+        this.tryMove((this.pos.x - p.pos.x) * 0.4 * dt, (this.pos.z - p.pos.z) * 0.4 * dt);
+      }
+    }
+
+    // §12.2 cyst carrier: seeds cyst film on the ground as it walks; the film
+    // keeps emitting spores after the carrier is gone (vent/contamination route)
+    if (this.s.carrier) {
+      this.cystT = (this.cystT ?? 4) - dt;
+      if (this.cystT <= 0) {
+        this.cystT = 5 + Math.random() * 4;
+        const bx = Math.floor(this.pos.x), by = Math.floor(this.pos.y), bz = Math.floor(this.pos.z);
+        if (this.game.world.get(bx, by, bz) === B.AIR && this.game.world.get(bx, by - 1, bz) !== B.AIR) {
+          this.game.placeContamination(bx, by, bz);
+        }
+      }
     }
 
     // Arrived at a non-player stimulus that is a physical block (machine, fire,
@@ -158,7 +204,8 @@ export class Infected {
 
     if (horizDist > 0.05 && this.state !== 'wander') {
       dir.normalize();
-      const speed = this.s.speed * (this.state === 'investigate' ? 0.65 : 1);
+      let speed = this.s.speed * (this.state === 'investigate' ? 0.65 : 1);
+      if (this.frenzied) speed *= 1.35; // §5.4 frenzy state
       const stepX = dir.x * speed * dt;
       const stepZ = dir.z * speed * dt;
       this.tryMove(stepX, stepZ);
@@ -169,12 +216,26 @@ export class Infected {
       this.tryMove(Math.sin(this.facing) * 0.4 * dt, Math.cos(this.facing) * 0.4 * dt);
     }
 
-    // gravity clamp to ground
-    const gy = this.groundY(this.pos.x, this.pos.z);
-    if (this.pos.y > gy + 0.1) this.pos.y = Math.max(gy, this.pos.y - 12 * dt);
-    else this.pos.y = gy;
+    // climbers cling briefly after leaving a face; everyone else falls hard
+    if (this.climbingT > 0) this.climbingT -= dt;
+
+    // gravity clamp to ground (skipped on a frame spent actively climbing)
+    if (!this._climbedNow) {
+      const gy = this.groundY(this.pos.x, this.pos.z);
+      if (this.pos.y > gy + 0.1) {
+        const fall = this.climbingT > 0 ? 2.5 : 12;
+        this.pos.y = Math.max(gy, this.pos.y - fall * dt);
+      } else this.pos.y = gy;
+    }
+    this._climbedNow = false;
 
     this.syncMesh(dt);
+  }
+
+  // Is this block soft ground a burrower can push through (§12.2)?
+  isSoft(x, y, z) {
+    const id = this.game.world.get(Math.floor(x), Math.floor(y), Math.floor(z));
+    return id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL;
   }
 
   tryMove(dx, dz) {
@@ -187,6 +248,24 @@ export class Infected {
     // can step up one block?
     if (blockFeet && !blockHead && !this.solidAt(nx, feetY + 2, nz)) {
       this.pos.x = nx; this.pos.z = nz; this.pos.y = feetY + 1; return;
+    }
+    // §12.2 burrower: pushes straight through soil/gravel, leaving readable
+    // disturbance (grass churned to dirt) instead of chewing at full cost
+    if (this.s.burrows) {
+      const bx = Math.floor(nx), bz = Math.floor(nz);
+      const ty = blockHead ? feetY + 1 : feetY;
+      if (this.isSoft(bx, ty, bz)) {
+        this.game.infectedAttackBlock(bx, ty, bz, this.s.blockDmg * 8 * (this._dt || 0.016), this);
+        this.game.leaveDisturbance(bx, bz);
+        return;
+      }
+    }
+    // §12.2 climber: blocked by a face → scale it instead of chewing it
+    if (this.s.climbs && blockHead && !this.solidAt(this.pos.x, feetY + 2, this.pos.z)) {
+      this.pos.y += 3.2 * (this._dt || 0.016);
+      this._climbedNow = true;   // defeat gravity for this frame
+      this.climbingT = 0.5;      // brief cling so it can crest the edge
+      return;
     }
     // blocked by a barrier — attack the obstructing block (breach / eat machine)
     const ty = blockHead ? feetY + 1 : feetY;
@@ -222,9 +301,18 @@ export class Infected {
     while (d < -Math.PI) d += Math.PI * 2;
     this.mesh.rotation.y += d * Math.min(1, 10 * dt);
     if (this.lunge > 0) { this.lunge -= dt; this.mesh.position.y += 0.1; }
+    // §5.5 early cue: while the body idles, the head still tracks the stimulus
+    if (this.headMesh && this.target && this.state !== 'wander') {
+      const want = Math.atan2(this.target.x - this.pos.x, this.target.z - this.pos.z) - this.mesh.rotation.y;
+      let hd = want - this.headMesh.rotation.y;
+      while (hd > Math.PI) hd -= Math.PI * 2;
+      while (hd < -Math.PI) hd += Math.PI * 2;
+      const lim = Math.PI * 0.45;
+      this.headMesh.rotation.y = Math.max(-lim, Math.min(lim, this.headMesh.rotation.y + hd * Math.min(1, 5 * dt)));
+    }
   }
 
-  takeHit(dmg, verified = true) {
+  takeHit(dmg, verified = true, source = null) {
     if (this.isFalse) {
       if (verified) { this.game.spawnHitSpark(this.pos, 0x9d8fd4); this.remove(); this.game.sanity.onFalseDispelled(); }
       return;
@@ -232,9 +320,15 @@ export class Infected {
     this.hp -= dmg;
     this.flash();
     this.game.sig.addBlood(this.pos.x, this.pos.y + 0.5, this.pos.z, 0.4);
-    // aggro on being hit
-    this.target = { x: this.game.player.pos.x, y: this.game.player.pos.y, z: this.game.player.pos.z };
-    this.targetIsPlayer = true; this.state = 'pursue';
+    if (source) {
+      // §12.3 #4: hit by a defensive system — turn on the machine, not the player
+      this.retaliate = source;
+      this.retaliateT = 6;
+    } else {
+      // aggro on being hit by hand
+      this.target = { x: this.game.player.pos.x, y: this.game.player.pos.y, z: this.game.player.pos.z };
+      this.targetIsPlayer = true; this.state = 'pursue';
+    }
     if (this.hp <= 0) this.die();
   }
 
@@ -251,6 +345,14 @@ export class Infected {
   die() {
     this.game.onInfectedKilled(this);
     this.game.sig.addBlood(this.pos.x, this.pos.y + 0.3, this.pos.z, 1.2);
+    // a carrier bursts: the film it dies in keeps working (§12.2)
+    if (this.s.carrier) {
+      const bx = Math.floor(this.pos.x), by = Math.floor(this.pos.y), bz = Math.floor(this.pos.z);
+      for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (Math.random() < 0.6) this.game.placeContamination(bx + dx, by, bz + dz);
+      }
+      this.game.toast('The carrier bursts — cyst film takes hold where it fell.', 'bad');
+    }
     this.remove();
   }
 

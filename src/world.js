@@ -163,6 +163,15 @@ export class World {
     this.buildLab();
     this.buildColonySeam();
     this.placeStartRefuge();
+    // full-game regions (§4.3, §17–18). Each uses its own forked RNG so the
+    // original terrain/structures above keep their exact per-seed layout.
+    this.placeNests();
+    this.buildIndustrialRuin();
+    this.buildFloodedAnnex();
+    this.buildSettlement();
+    this.buildTransitAndDeepSite();
+    this.placeSecondaryReservoirs();
+    this.addLabServiceTunnel();
 
     for (let x = 0; x < SIZE_X; x++)
       for (let z = 0; z < SIZE_Z; z++) this.updateHeight(x, z);
@@ -362,13 +371,288 @@ export class World {
     for (let x = x0; x <= x1; x++)
       for (let z = z0; z <= z1; z++)
         if ((x + z) % 3 !== 0) this._set(x, surf + 4, z, B.PLANK);
-    // a crafting bench inside
+    // a crafting bench inside, and the dusty shortwave set (§15.8)
     this._set(sx - 1, surf + 1, sz + 1, B.BENCH);
+    this._set(sx + 1, surf + 1, sz, B.RADIO);
     this.poi.spawn = { x: sx + 0.5, y: surf + 1, z: sz + 0.5 };
     this.poi.emergency = { x: sx + 1, y: surf + 1, z: sz + 1 };
   }
 
   spawnPoint() { return this.poi.spawn; }
+
+  // ---------------- Full-game regions (§4.3, §17–18) ----------------
+
+  // Infected nests seeded through the cave network (§4.3). The director treats
+  // an unresolved nest near the player as an incursion source (§6.3).
+  placeNests() {
+    const rng = this.rng.fork('nest');
+    this.poi.nests = [];
+    for (let attempt = 0; attempt < 60 && this.poi.nests.length < 5; attempt++) {
+      const x = rng.int(8, SIZE_X - 9), z = rng.int(8, SIZE_Z - 9);
+      const surf = this.surfaceY(x, z);
+      // find a cave pocket: air with solid floor, well below the surface
+      let found = null;
+      for (let y = 6; y < surf - 6; y++) {
+        if (this.get(x, y, z) === B.AIR && this.get(x, y - 1, z) !== B.AIR) { found = y; break; }
+      }
+      if (found == null) continue;
+      // keep nests out of the shack's backyard
+      const s = this.poi.spawn;
+      if (Math.hypot(x - s.x, z - s.z) < 22) continue;
+      const y = found;
+      this._set(x, y, z, B.NEST);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (rng.chance(0.7) && this.get(x + dx, y, z + dz) === B.AIR) this._set(x + dx, y, z + dz, rng.chance(0.4) ? B.NEST : B.CYST);
+      }
+      this.poi.nests.push({ x, y, z });
+    }
+  }
+
+  // Industrial ruin (§4.3): a collapsed foundry. The kiln is occupied by a
+  // tissue-fused host (§11.3) — purging it restores steel production at scale.
+  buildIndustrialRuin() {
+    const rng = this.rng.fork('ruin');
+    const cx = Math.floor(SIZE_X * 0.6), cz = Math.floor(SIZE_Z * 0.75);
+    const surf = this.surfaceY(cx, cz);
+    const x0 = cx - 6, x1 = cx + 6, z0 = cz - 5, z1 = cz + 5;
+    for (let x = x0; x <= x1; x++)
+      for (let z = z0; z <= z1; z++) {
+        for (let y = surf + 1; y <= surf + 6; y++) this._set(x, y, z, B.AIR);
+        this._set(x, surf, z, B.RUIN_FLOOR);
+        const isWall = x === x0 || x === x1 || z === z0 || z === z1;
+        if (isWall) {
+          // weathered perimeter: broken to uneven heights, with gaps
+          const h = rng.chance(0.2) ? 0 : rng.int(1, 3);
+          for (let y = 1; y <= h; y++) this._set(x, surf + y, z, B.RUIN_WALL);
+        }
+      }
+    // the kiln stack against the north wall
+    const kx = cx, kz = z0 + 1;
+    this._set(kx, surf + 1, kz, B.KILN);
+    this._set(kx, surf + 2, kz, B.RUIN_WALL);
+    this._set(kx, surf + 3, kz, B.RUIN_WALL);
+    // salvage: machine scrap piles (source of control relays)
+    for (let i = 0; i < 9; i++) {
+      const x = rng.int(x0 + 1, x1 - 1), z = rng.int(z0 + 1, z1 - 1);
+      if (this.get(x, surf + 1, z) === B.AIR) this._set(x, surf + 1, z, B.SCRAP);
+    }
+    for (let i = 0; i < 5; i++) {
+      const x = rng.int(x0 + 1, x1 - 1), z = rng.int(z0 + 1, z1 - 1);
+      if (this.get(x, surf + 1, z) === B.AIR) this._set(x, surf + 1, z, B.CYST);
+    }
+    this.poi.ruin = { x: cx, z: cz, surf, kiln: { x: kx, y: surf + 1, z: kz }, hostSpawn: { x: cx + 0.5, y: surf + 1, z: cz + 2.5 } };
+  }
+
+  // Flooded laboratory annex (§11.3): a pump organism blocks a drowned pump
+  // gallery. Purging it drains the annex and exposes the filtration stores.
+  buildFloodedAnnex() {
+    const cx = Math.floor(SIZE_X * 0.68), cz = Math.floor(SIZE_Z * 0.32);
+    const surf = this.surfaceY(cx, cz);
+    const floor = surf - 7;
+    const w = 7, d = 9, h = 5;
+    const x0 = cx - Math.floor(w / 2), z0 = cz - Math.floor(d / 2);
+    for (let x = x0 - 1; x <= x0 + w; x++)
+      for (let z = z0 - 1; z <= z0 + d; z++)
+        for (let y = floor - 1; y <= floor + h; y++) {
+          const edge = x === x0 - 1 || x === x0 + w || z === z0 - 1 || z === z0 + d || y === floor - 1 || y === floor + h;
+          if (edge) this._set(x, y, z, y === floor - 1 ? B.LAB_FLOOR : B.LAB_WALL);
+          else this._set(x, y, z, B.WATER); // drowned until the pump host dies
+        }
+    // access shaft down the north side — drowned to the room's water line
+    for (let y = floor; y <= surf + 1; y++) this._set(cx, y, z0 - 1, y <= floor + h - 2 ? B.WATER : B.AIR);
+    // above-water headroom strip at the ceiling so the fight is survivable
+    for (let x = x0; x < x0 + w; x++)
+      for (let z = z0; z < z0 + d; z++) this._set(x, floor + h - 1, z, B.AIR);
+    // filtration stores: pickups on the annex floor, reachable once drained
+    this.pickups.push(
+      { x: x0 + 1.5, y: floor + 0.02, z: z0 + 1.5, item: 'filter_unit', n: 2 },
+      { x: x0 + w - 1.5, y: floor + 0.02, z: z0 + d - 1.5, item: 'filter_unit', n: 1 },
+      { x: cx + 0.5, y: floor + 0.02, z: z0 + 1.5, item: 'relay_module', n: 1 },
+    );
+    this.poi.annex = { x: cx, z: cz, surf, floor, x0, z0, w, d, h, hostSpawn: { x: cx + 0.5, y: floor, z: cz + 0.5 } };
+  }
+
+  // Abandoned settlement (§4.3): ruined concrete husks — dense salvage, human
+  // traces, interior cyst contamination, and a marked supply cache (§15.8).
+  buildSettlement() {
+    const rng = this.rng.fork('settlement');
+    const cx = Math.floor(SIZE_X * 0.42), cz = Math.floor(SIZE_Z * 0.6);
+    const husks = [[-8, -6, 5, 5], [2, -4, 4, 6], [-3, 4, 6, 4]];
+    for (const [ox, oz, w, d] of husks) {
+      const x0 = cx + ox, z0 = cz + oz;
+      const surf = this.surfaceY(x0 + Math.floor(w / 2), z0 + Math.floor(d / 2));
+      for (let x = x0; x < x0 + w; x++)
+        for (let z = z0; z < z0 + d; z++) {
+          for (let y = surf + 1; y <= surf + 4; y++) this._set(x, y, z, B.AIR);
+          this._set(x, surf, z, B.RUIN_FLOOR);
+          const isWall = x === x0 || x === x0 + w - 1 || z === z0 || z === z0 + d - 1;
+          if (isWall && rng.chance(0.75)) {
+            const h = rng.int(1, 3);
+            for (let y = 1; y <= h; y++) this._set(x, surf + y, z, B.RUIN_WALL);
+          }
+        }
+      // interior traces: scrap + cyst film
+      for (let i = 0; i < 3; i++) {
+        const x = rng.int(x0 + 1, x0 + w - 2), z = rng.int(z0 + 1, z0 + d - 2);
+        if (this.get(x, surf + 1, z) === B.AIR) this._set(x, surf + 1, z, rng.chance(0.5) ? B.SCRAP : B.CYST);
+      }
+    }
+    // someone passed through recently: a marked cache (§15.8)
+    const surf = this.surfaceY(cx, cz);
+    this.pickups.push(
+      { x: cx + 0.5, y: surf + 1.02, z: cz + 0.5, item: 'cooked_meat', n: 2 },
+      { x: cx + 1.5, y: surf + 1.02, z: cz + 0.5, item: 'iron_ampoule', n: 1 },
+    );
+    this.poi.settlement = { x: cx, z: cz, surf };
+  }
+
+  // Regional containment transit (§17) + the Lazarus Deep Site beneath (§18):
+  // a hardened surface relay station whose pressure rail drops into a buried
+  // complex — entry hall, three purge galleries, and the reservoir vault.
+  buildTransitAndDeepSite() {
+    // --- surface station ---
+    const sx = Math.floor(SIZE_X * 0.62), sz = Math.floor(SIZE_Z * 0.18);
+    let surf = this.surfaceY(sx, sz);
+    for (let x = sx - 4; x <= sx + 4; x++)
+      for (let z = sz - 3; z <= sz + 3; z++) {
+        for (let y = surf + 1; y <= surf + 6; y++) this._set(x, y, z, B.AIR);
+        this._set(x, surf, z, B.RUIN_FLOOR);
+      }
+    const x0 = sx - 3, x1 = sx + 3, z0 = sz - 2, z1 = sz + 2;
+    for (let x = x0; x <= x1; x++)
+      for (let z = z0; z <= z1; z++) {
+        const isWall = x === x0 || x === x1 || z === z0 || z === z1;
+        for (let y = 1; y <= 3; y++) if (isWall) this._set(x, surf + y, z, B.TRANSIT_HULL);
+        this._set(x, surf + 4, z, B.TRANSIT_HULL); // roof — hardened, sealed
+      }
+    // doorway south
+    this._set(sx, surf + 1, z1, B.AIR);
+    this._set(sx, surf + 2, z1, B.AIR);
+    // controls on the north wall: panel + rail gate, duty log beside them
+    const panel = { x: sx - 1, y: surf + 1, z: z0 + 1 };
+    const gate = { x: sx + 1, y: surf + 1, z: z0 + 1 };
+    this._set(panel.x, panel.y, panel.z, B.TRANSIT_PANEL);
+    this._set(gate.x, gate.y, gate.z, B.TRANSIT_GATE);
+    this._set(sx, surf + 1, z0 + 1, B.ARCHIVE_4);
+    this._set(sx - 2, surf + 3, z0 + 1, B.LAB_LIGHT);
+    this.poi.transit = { x: sx, z: sz, surf, panel, gate };
+
+    // --- buried Deep Site: entry + three galleries + vault, chained east ---
+    const floor = 4, top = floor + 5;
+    const zc0 = 8, zc1 = 20; // room z-range
+    const rooms = [
+      { x0: 78, x1: 85, kind: 'entry' },
+      { x0: 86, x1: 93, kind: 'gallery', valve: 1 },
+      { x0: 94, x1: 101, kind: 'gallery', valve: 2 },
+      { x0: 102, x1: 109, kind: 'gallery', valve: 3 },
+      { x0: 110, x1: 124, kind: 'vault' },
+    ];
+    const shell = (x, y, z, isFloor) => this._set(x, y, z, isFloor ? B.DEEP_FLOOR : B.DEEP_WALL);
+    for (const r of rooms) {
+      const rz0 = r.kind === 'vault' ? zc0 - 2 : zc0, rz1 = r.kind === 'vault' ? zc1 + 2 : zc1;
+      for (let x = r.x0 - 1; x <= r.x1 + 1; x++)
+        for (let z = rz0 - 1; z <= rz1 + 1; z++)
+          for (let y = floor - 1; y <= top; y++) {
+            const edge = x === r.x0 - 1 || x === r.x1 + 1 || z === rz0 - 1 || z === rz1 + 1 || y === floor - 1 || y === top;
+            if (edge) shell(x, y, z, y === floor - 1);
+            else this._set(x, y, z, B.AIR);
+          }
+      // sparse hardened lighting
+      for (let x = r.x0 + 2; x < r.x1; x += 4) { this._set(x, top - 1, zc0 + 2, B.DEEP_LIGHT); this._set(x, top - 1, zc1 - 2, B.DEEP_LIGHT); }
+    }
+    // doorways between consecutive rooms (z 13..15, two tall)
+    for (let i = 0; i < rooms.length - 1; i++) {
+      const wallX = rooms[i].x1 + 1;
+      for (let z = 13; z <= 15; z++) for (let y = floor; y <= floor + 2; y++) this._set(wallX, y, z, B.AIR);
+    }
+    const valves = [];
+    for (const r of rooms) {
+      if (r.kind !== 'gallery') continue;
+      const v = { x: r.x1, y: floor + 1, z: 10, index: r.valve };
+      this._set(v.x, v.y, v.z, B.VALVE);
+      valves.push(v);
+      // gallery contamination scales with depth into the complex
+      for (let i = 0; i < 3 + r.valve * 2; i++) {
+        const x = r.x0 + 1 + ((i * 3 + r.valve) % (r.x1 - r.x0 - 1));
+        const z = zc0 + 1 + ((i * 5 + r.valve * 2) % (zc1 - zc0 - 1));
+        if (this.get(x, floor, z) === B.AIR) this._set(x, floor, z, i % 3 === 0 ? B.NEST : B.CYST);
+      }
+    }
+    // Venn's remains rest at gallery one — she opened the first valve (§15.6)
+    this._set(88, floor, 18, B.ARCHIVE_5);
+    // the rail terminus in the entry hall — the ride back to the surface
+    this._set(80, floor, 10, B.TRANSIT_GATE);
+    // vault: reservoir growth clusters + Roane's outline (tragic evidence)
+    const vault = rooms[4];
+    const clusters = [];
+    const spots = [[113, 10], [113, 19], [117, 8], [121, 14], [117, 21]];
+    for (const [cxx, czz] of spots) {
+      const cells = [];
+      for (let dx = -1; dx <= 1; dx++)
+        for (let dz = -1; dz <= 1; dz++) {
+          if (Math.abs(dx) + Math.abs(dz) === 2) continue;
+          for (let dy = 0; dy <= (dx === 0 && dz === 0 ? 2 : 0); dy++) {
+            const x = cxx + dx, y = floor + dy, z = czz + dz;
+            if (this.get(x, y, z) === B.AIR) { this._set(x, y, z, B.RESERVOIR_TISSUE); cells.push([x, y, z]); }
+          }
+        }
+      clusters.push({ x: cxx, y: floor, z: czz, cells });
+    }
+    this.poi.deep = {
+      floor, top, x0: 78, x1: 124, z0: zc0 - 2, z1: zc1 + 2,
+      entry: { x: 81, y: floor, z: 14 }, valves, clusters,
+      gate: { x: 80, y: floor, z: 10 },
+      roane: { x: 118, y: floor, z: 14 },
+      vault: { x0: vault.x0, x1: vault.x1, z0: zc0 - 2, z1: zc1 + 2 },
+    };
+    // the vault holds a continuity core cache — reward beyond the objective
+    this.pickups.push({ x: 122.5, y: floor + 0.02, z: 14.5, item: 'continuity_core', n: 1 });
+  }
+
+  // Alternate lab access (§11.2): an excavated service tunnel, collapsed and
+  // plugged with gravel — a low-signature dig route beside the main corridor.
+  addLabServiceTunnel() {
+    const L = this.poi.lab;
+    if (!L) return;
+    const tx = L.x0 - 1, floor = L.floor;
+    // breach the west bulkhead at floor level (two tall)
+    this._set(tx, floor, L.z0 + Math.floor(L.d / 2), B.AIR);
+    this._set(tx, floor + 1, L.z0 + Math.floor(L.d / 2), B.AIR);
+    // a short corridor west, then a gravel-choked shaft to the surface
+    const tz = L.z0 + Math.floor(L.d / 2);
+    for (let x = tx - 1; x >= tx - 3; x--) { this._set(x, floor, tz, B.AIR); this._set(x, floor + 1, tz, B.AIR); }
+    const sxx = tx - 4;
+    const surf = this.surfaceY(sxx, tz);
+    for (let y = floor; y <= surf; y++) this._set(sxx, y, tz, B.GRAVEL); // dig down to enter
+    this.poi.labTunnel = { x: sxx, z: tz, surf };
+  }
+
+  // Secondary reservoirs (§19): post-game reclamation targets. Sterilizing one
+  // permanently reduces regional pressure.
+  placeSecondaryReservoirs() {
+    this.poi.reservoirs = [];
+    const sites = [
+      { x: Math.floor(SIZE_X * 0.15), z: Math.floor(SIZE_Z * 0.85), id: 'res1' },
+      { x: Math.floor(SIZE_X * 0.88), z: Math.floor(SIZE_Z * 0.78), id: 'res2' },
+    ];
+    for (const s of sites) {
+      const surf = this.surfaceY(s.x, s.z);
+      const cy = Math.max(6, surf - 9);
+      for (let x = s.x - 3; x <= s.x + 3; x++)
+        for (let z = s.z - 3; z <= s.z + 3; z++)
+          for (let y = cy - 2; y <= cy + 2; y++) {
+            if ((x - s.x) ** 2 + ((y - cy) * 1.5) ** 2 + (z - s.z) ** 2 < 12 && this.get(x, y, z) !== B.BEDROCK) this._set(x, y, z, B.AIR);
+          }
+      this._set(s.x, cy - 1, s.z, B.NEST);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        this._set(s.x + dx, cy - 1, s.z + dz, B.RESERVOIR_TISSUE);
+        this._set(s.x + dx, cy, s.z + dz, B.CYST);
+      }
+      // a shaft hint from the surface
+      for (let y = surf; y >= cy; y--) this._set(s.x, y, s.z - 4, B.AIR);
+      this.poi.reservoirs.push({ x: s.x, y: cy, z: s.z, id: s.id });
+    }
+  }
 
   // ---------------- Meshing ----------------
   vColorFor(id, face, x, y, z) {

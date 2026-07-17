@@ -22,6 +22,11 @@ function makeScenarioGame(seed) {
   game.inv = { added: [], add(id, n) { this.added.push({ id, n }); return 0; } };
   game.machines = { map: new Map(), get: () => null };
   game.hud.updateHotbar = () => {};
+  // full-game campaign state the late scenarios drive (matches main.js defaults)
+  game.bossState = { kiln: {}, pump: {} };
+  game.transit = { restored: false, siegeActive: false };
+  game.deep = { valves: [false, false, false], heatFailed: false, flooded: false, purged: false };
+  game.sig.onBlockChanged = () => {};
   return game;
 }
 
@@ -82,6 +87,29 @@ test('lab scenario teleports inside the lab volume', () => {
   const head = game.world.get(Math.floor(p.x), Math.floor(p.y) + 1, Math.floor(p.z));
   assert.equal(feet, B.AIR, 'feet in air');
   assert.equal(head, B.AIR, 'head in air');
+});
+
+test('deepsite scenario drops the player standing in the entry hall with the rail open', () => {
+  const game = makeScenarioGame('scn-deep');
+  applyScenario(game, 'deepsite');
+  assert.equal(game.transit.restored, true, 'rail is open');
+  const d = game.world.poi.deep;
+  const p = game.player.pos;
+  assert.ok(Math.abs(p.x - (d.entry.x + 0.5)) < 0.01 && Math.abs(p.z - (d.entry.z + 0.5)) < 0.01);
+  assert.equal(game.world.get(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), B.AIR, 'feet in air');
+  assert.equal(game.world.get(Math.floor(p.x), Math.floor(p.y) + 1, Math.floor(p.z)), B.AIR, 'head in air');
+});
+
+test('endgame scenario arrives purged: valves open, tissue gone, pressure flags set', () => {
+  const game = makeScenarioGame('scn-end');
+  applyScenario(game, 'endgame');
+  assert.deepEqual(game.deep.valves, [true, true, true]);
+  assert.equal(game.deep.purged, true);
+  assert.equal(game.deep.tissueLeft, 0);
+  for (const c of game.world.poi.deep.clusters)
+    for (const [x, y, z] of c.cells)
+      assert.equal(game.world.get(x, y, z), B.AIR, 'vault tissue burned out');
+  assert.ok(game.valleyFlags.has('deepPurged') && game.valleyFlags.has('transitRestored'));
 });
 
 test('boss scenario finds a standable pocket near the colony', () => {

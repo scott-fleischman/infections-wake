@@ -12,11 +12,13 @@ const $ = (id) => document.getElementById(id);
 export class HUD {
   constructor(game) {
     this.game = game;
-    this.screens = ['inv-screen', 'log-screen', 'catalog-card', 'machine-screen', 'pause-screen', 'death-screen', 'fail-screen', 'menu-screen'];
+    this.screens = ['inv-screen', 'log-screen', 'map-screen', 'catalog-card', 'machine-screen', 'chest-screen', 'pause-screen', 'death-screen', 'fail-screen', 'menu-screen'];
     this.activeScreen = 'menu-screen';
     this.machineOpen = null;
+    this.chestOpen = null;
     this.buildHelp();
     this.bindTabs();
+    this.bindAccess();
   }
 
   buildHelp() {
@@ -26,7 +28,7 @@ export class HUD {
       line(node, [['LMB (hold)', true], [' break block / attack · ', false], ['RMB', true], [' place block', false]]);
       line(node, [['1–6', true], [' hotbar · ', false], ['E', true], [' field kit & crafting', false]]);
       line(node, [['F', true], [' interact (doors, machines, archives, beds)', false]]);
-      line(node, [['J', true], [' story log · ', false], ['Esc', true], [' pause', false]]);
+      line(node, [['J', true], [' story log · ', false], ['M', true], [' valley map · ', false], ['Esc', true], [' pause', false]]);
       node.appendChild(el('div', null, ' '));
       line(node, [['Fires, lights, and machines keep you alive — and make you visible.', false]]);
       line(node, [['The infection is blind. It is not deaf.', false]]);
@@ -56,6 +58,7 @@ export class HUD {
     for (const s of this.screens) $(s).classList.add('hidden');
     this.activeScreen = null;
     this.machineOpen = null;
+    this.chestOpen = null;
   }
   isScreenOpen() { return this.activeScreen != null; }
 
@@ -158,8 +161,10 @@ export class HUD {
     $('sig-panel').classList.remove('hidden');
     if (g.unlocks.sigAll) document.querySelectorAll('.sig-adv').forEach(e2 => e2.classList.remove('hidden'));
     const t = g.sig.sampleTotals(g.player.pos.x, g.player.pos.y + 1, g.player.pos.z, true);
+    // the spore meter reads local contamination, not an emitter sample (§20.3)
+    t.spores = Math.max(t.spores || 0, g.sanity.sporeExposure());
     const set = (ch) => { const e2 = $('sig-' + ch); if (e2) e2.style.width = `${Math.min(100, t[ch] * 55)}%`; };
-    ['heat', 'light', 'vibration', 'co2', 'blood', 'electrical'].forEach(set);
+    ['heat', 'light', 'vibration', 'co2', 'blood', 'electrical', 'spores', 'metal'].forEach(set);
   }
 
   // ---------- score ----------
@@ -182,6 +187,28 @@ export class HUD {
     e2.classList.remove('hidden');
   }
 
+  airWarning(text) {
+    const e2 = $('air-warning');
+    if (!text) { e2.classList.add('hidden'); return; }
+    e2.textContent = text;
+    e2.classList.remove('hidden');
+  }
+
+  // §18.4: the boss bar is reservoir viability, shown while inside the vault
+  updateViability() {
+    const g = this.game;
+    const panel = $('viability-panel');
+    const d = g.world?.poi?.deep;
+    if (!d || !g.transit.restored || g.deep.purged === undefined) { panel.classList.add('hidden'); return; }
+    const p = g.player.pos;
+    const inDeep = p.y < d.top + 2 && p.x >= d.x0 - 2 && p.x <= d.x1 + 2 && p.z >= d.z0 - 2 && p.z <= d.z1 + 2;
+    if (!inDeep || g.deep.tissueTotal == null) { panel.classList.add('hidden'); return; }
+    panel.classList.remove('hidden');
+    const pct = g.deep.tissueTotal > 0 ? Math.round(100 * g.deep.tissueLeft / g.deep.tissueTotal) : 0;
+    $('viability-bar').style.width = pct + '%';
+    $('viability-pct').textContent = g.deep.purged ? 'SILENT' : pct + '%';
+  }
+
   // ---------- sanity fx ----------
   updateSanityFx() {
     const g = this.game;
@@ -191,8 +218,10 @@ export class HUD {
     if (v < SANITY.thresholds.stable) op = 0.12;        // unstable band
     if (v < SANITY.thresholds.unstable) op = 0.38;      // hallucinating band
     if (v < SANITY.thresholds.hallucinating) op = 0.6;  // collapse
+    // §7.5 accessibility: soften presentation without removing the cost
+    if (g.access?.reduceDistortion) op = Math.min(op, 0.18);
     fx.style.opacity = String(op);
-    fx.classList.toggle('jitter', v < SANITY.thresholds.unstable);
+    fx.classList.toggle('jitter', v < SANITY.thresholds.unstable && !g.access?.noFlashing);
   }
 
   // ---------- hotbar / inventory ----------
@@ -215,6 +244,12 @@ export class HUD {
       { label: 'Find the buried lab (far plains)', done: g.valleyFlags.has('labFound') || cataloged > 0 },
       { label: 'Catalog all 3 lab archives', done: cataloged >= 3 },
       { label: 'Purge the colony host', done: g.bossDead },
+      { label: 'Reclaim the industrial kiln (steel)', done: !!g.bossState.kiln.dead },
+      { label: 'Drain the flooded annex (filtration)', done: !!g.bossState.pump.dead },
+      { label: 'Restore the transit line & hold the platform', done: !!g.transit.restored },
+      { label: 'Open the three purge valves', done: g.deep.valves.every(Boolean) },
+      { label: 'Purge the reservoir', done: !!g.deep.purged },
+      { label: 'Sterilize the secondary reservoirs', done: (g.world.poi.reservoirs || []).every(r => g.valleyFlags.has('reclaim:' + r.id)) },
     ];
   }
 
@@ -287,10 +322,11 @@ export class HUD {
     clear(list);
     const nearBench = g.nearStation('bench');
     for (const r of RECIPES) {
-      if (r.station === 'furnace') continue; // smelting happens at the furnace panel
+      if (r.station === 'furnace' || r.station === 'kiln') continue; // smelting happens at those panels
       const needsBench = r.station === 'bench';
       const tierLocked = r.tierUnlock && !g.tiers.has(r.tierUnlock);
       if (tierLocked) continue; // hidden until the tier is reached
+      if (r.needsUnlock && !g.unlocks[r.needsUnlock]) continue; // research-gated (§16.3)
       const can = g.inv.has(r.cost) && (!needsBench || nearBench);
       const box = el('div', 'recipe' + (can ? '' : ' locked'));
       const left = el('div');
@@ -370,33 +406,112 @@ export class HUD {
     const g = this.game;
     const m = this.machineOpen;
     if (!m) return;
-    const titles = { generator: 'FUEL GENERATOR', lamp: 'POWERED LAMP', drill: 'MINING DRILL', turret: 'WARM-BODY TURRET', beacon: 'FIELD RECOVERY BEACON', furnace: 'FURNACE', cradle: 'LAZARUS CRADLE' };
+    const titles = {
+      generator: 'FUEL GENERATOR', lamp: 'POWERED LAMP', drill: 'MINING DRILL', turret: 'WARM-BODY TURRET',
+      beacon: 'FIELD RECOVERY BEACON', furnace: 'FURNACE', cradle: 'LAZARUS CRADLE', battery: 'BATTERY BANK',
+      scrubber: 'AIR SCRUBBER', uv: 'UV STERILIZER', vibturret: 'VIBRATION TURRET', sensor: 'FIELD SENSOR',
+      maint: 'MAINTENANCE BENCH', transit: 'TRANSIT CONTROL', kiln: 'INDUSTRIAL KILN',
+    };
     $('machine-title').textContent = titles[m.type] || 'MACHINE';
     const body = $('machine-body');
     const btns = $('machine-buttons');
     clear(body); clear(btns);
     const note = (t) => { const d = el('div', 'dim', t); d.style.marginTop = '8px'; body.appendChild(d); };
+    // §10.2 priority groups: every powered consumer can be pinned by the player
+    const prioBtn = () => {
+      if (m.type === 'generator' || m.type === 'switch' || m.type === 'battery' || m.type === 'furnace' || m.type === 'kiln' || m.type === 'transit') return;
+      this.mkBtn(btns, `Priority: ${g.machines.prioName(m)}`, () => { g.machines.cyclePriority(m); this.renderMachine(); });
+    };
+    if (m.sterilizedT > 0) body.appendChild(row('CORRODED', `sterilant damage — offline ${Math.ceil(m.sterilizedT)}s`));
 
     if (m.type === 'generator') {
-      body.appendChild(row('Status', m.running ? 'RUNNING' : m.enabled ? (m.fuel > 0 ? 'STARTING' : 'OUT OF FUEL') : 'SWITCHED OFF'));
+      body.appendChild(row('Status', m.fuseBlown ? 'FUSE BLOWN' : m.running ? 'RUNNING' : m.enabled ? (m.fuel > 0 ? 'STARTING' : 'OUT OF FUEL') : 'SWITCHED OFF'));
       body.appendChild(row('Fuel', gauge(m.fuel / 40, `${m.fuel.toFixed(0)}/40`)));
       body.appendChild(row('Output', m.running ? '12 kW' : '0 kW'));
-      note('Running generators emit heat, vibration, and an electrical field. Everything that emits is a beacon.');
+      note('Running generators emit heat, vibration, exhaust, and an electrical field. Everything that emits is a beacon. Overload the network for long and the fuse blows.');
       this.mkBtn(btns, m.enabled ? 'Switch off' : 'Switch on', () => { m.enabled = !m.enabled; this.renderMachine(); });
       this.mkBtn(btns, 'Load coal', () => { g.machines.loadFuel(m, g.inv); this.renderMachine(); });
+      if (m.fuseBlown) this.mkBtn(btns, 'Replace fuse (1 iron)', () => { g.machines.replaceFuse(m, g.inv); this.renderMachine(); });
+    } else if (m.type === 'battery') {
+      body.appendChild(row('Charge', gauge(m.charge / 60, `${m.charge.toFixed(0)}/60`)));
+      body.appendChild(row('Status', m.charge > 0.5 ? (m.powered ? 'CHARGING / READY' : 'DISCHARGING') : m.powered ? 'CHARGING' : 'EMPTY'));
+      note('Buffers surplus power and bridges shortfalls — scheduled operation without a running generator. Stored metal is a signature: machine eaters can smell a full bank.');
+    } else if (m.type === 'scrubber') {
+      body.appendChild(row('Status', m.running ? 'FILTERING' : 'UNPOWERED'));
+      note('Strips spores and breath from the air nearby. Clean air steadies the mind (§7.3) — and starves the CO₂ gradient the carriers follow.');
+      prioBtn();
+    } else if (m.type === 'uv') {
+      body.appendChild(row('Status', m.running ? 'EMITTING' : 'UNPOWERED'));
+      note('Burns exposed cyst film and infected tissue in line of sight. Useless through walls; limited against deep growth.');
+      prioBtn();
+    } else if (m.type === 'vibturret') {
+      body.appendChild(row('Status', m.running ? 'LISTENING' : 'UNPOWERED'));
+      note('Reads movement through the ground — the only defense that sees a burrower before it surfaces. No ammunition; steady power and a steady vibration signature.');
+      prioBtn();
+    } else if (m.type === 'sensor') {
+      body.appendChild(row('Status', m.running ? 'WATCHING' : 'UNPOWERED'));
+      note('Steadies the dusk forecast and contradicts false alarms. When the sensor and your eyes disagree, trust the sensor.');
+      prioBtn();
+    } else if (m.type === 'maint') {
+      body.appendChild(row('Repair stock', `${Math.floor(m.bank)} HP`));
+      note('Slowly repairs damaged (not destroyed) structures nearby from stocked planks. Manual repair is still faster in an emergency (§6.7).');
+      this.mkBtn(btns, 'Stock planks', () => { g.machines.loadPlanks(m, g.inv); this.renderMachine(); });
+    } else if (m.type === 'transit') {
+      const cfg = { relays: 2, filters: 1 };
+      body.appendChild(row('Control relays', `${m.relays}/${cfg.relays}`));
+      body.appendChild(row('Filtration', `${m.filters}/${cfg.filters}`));
+      body.appendChild(row('Intake power', m.powered ? '8 kW — LIVE' : 'DEAD (needs 8 kW)'));
+      body.appendChild(row('Line status', g.transit.restored ? 'RESTORED' : g.transit.siegeActive ? 'STARTUP — HOLD THE PLATFORM' : 'DORMANT'));
+      note('Restoration checklist (§17.2): relays, filtration, external power. The startup signature will be heard by everything in the valley. Ready your defenses FIRST.');
+      if (!g.transit.restored) {
+        this.mkBtn(btns, 'Install relay', () => {
+          if (g.inv.count('relay_module') <= 0) { g.toast('No control relay. Salvage machine scrap.'); return; }
+          if (m.relays >= cfg.relays) { g.toast('Relay rack full.'); return; }
+          g.inv.remove('relay_module', 1); m.relays++; this.renderMachine();
+        });
+        this.mkBtn(btns, 'Install filter', () => {
+          if (g.inv.count('filter_unit') <= 0) { g.toast('No filtration cartridge. The flooded annex holds them.'); return; }
+          if (m.filters >= cfg.filters) { g.toast('Filtration seated.'); return; }
+          g.inv.remove('filter_unit', 1); m.filters++; this.renderMachine();
+        });
+        this.mkBtn(btns, 'START TRANSIT LINE', () => { g.startTransit(m); this.renderMachine(); });
+      }
+    } else if (m.type === 'cradle') {
+      body.appendChild(row('Continuity core', m.core ? 'SEATED' : 'EMPTY'));
+      body.appendChild(row('Power', m.running ? 'LIVE' : 'DEAD'));
+      body.appendChild(row('Active spawn', m.selected !== false ? 'THIS CRADLE' : 'another cradle'));
+      note('A powered cradle with a seated core recovers you — if it is powered at the MOMENT you die. No hidden reserve. Ever (§13.2).');
+      this.mkBtn(btns, 'Seat continuity core', () => { g.machines.loadCore(m, g.inv); this.renderMachine(); });
+      if (m.core && m.selected === false) this.mkBtn(btns, 'Make active spawn', () => { g.machines.selectCradle(m); g.hud.updateRecovery(); this.renderMachine(); });
+    } else if (m.type === 'kiln') {
+      body.appendChild(row('Fuel', gauge(m.fuel / 20, m.fuel.toFixed(0))));
+      body.appendChild(row('Working', m.queue.length > 0 ? `${m.queue.length} item(s)` : 'idle'));
+      body.appendChild(row('Output', Object.entries(m.out || {}).filter(([, n]) => n > 0).map(([id, n]) => `${n}× ${itemDef(id)?.name}`).join(', ') || '—'));
+      note('Restored industrial infrastructure (§11.3): smelts STEEL from iron and coal, fast and loud. This is not a machine you hide.');
+      this.mkBtn(btns, 'Add fuel', () => { g.furnaceAddFuel(m); this.renderMachine(); });
+      this.mkBtn(btns, 'Smelt steel (1 iron + 2 coal)', () => {
+        if (g.inv.count('iron_ingot') < 1 || g.inv.count('coal') < 2) { g.toast('Steel wants 1 iron ingot + 2 coal.'); return; }
+        g.inv.remove('iron_ingot', 1); g.inv.remove('coal', 2);
+        m.queue.push({ from: 'iron_ingot', to: 'steel_ingot' });
+        this.renderMachine();
+      });
+      this.mkBtn(btns, 'Cook raw meat', () => { g.furnaceAddJob(m, 'raw_meat', 'cooked_meat'); this.renderMachine(); });
+      this.mkBtn(btns, 'Take output', () => { g.furnaceTake(m); this.renderMachine(); this.updateHotbar(); });
     } else if (m.type === 'drill') {
       const buf = Object.entries(m.buffer || {}).filter(([, n]) => n > 0).map(([id, n]) => `${n}× ${itemDef(id)?.name}`).join(', ') || 'empty';
-      body.appendChild(row('Status', m.running ? (m.oreTarget || g.machines.findOre(m) ? 'DRILLING' : 'NO ORE BODY') : 'UNPOWERED'));
+      body.appendChild(row('Status', m.full ? 'FULL — collect output' : m.running ? (m.oreTarget || g.machines.findOre(m) ? 'DRILLING' : 'NO ORE BODY') : 'UNPOWERED'));
       body.appendChild(row('Progress', gauge(m.progress || 0)));
       body.appendChild(row('Buffer', buf));
-      note('Requires placement against ore. Produces steady vibration — vibration-sensitive strains follow it.');
+      note('Requires placement against ore. Produces steady vibration — vibration-sensitive strains follow it. Stops when full.');
       this.mkBtn(btns, 'Collect output', () => { g.machines.collect(m, g.inv); this.renderMachine(); this.updateHotbar(); });
+      prioBtn();
     } else if (m.type === 'turret') {
       body.appendChild(row('Status', m.overheat ? 'OVERHEATED' : m.running ? (m.ammo > 0 ? 'TRACKING' : 'NO AMMUNITION') : 'UNPOWERED'));
       body.appendChild(row('Ammunition', `${m.ammo}/40`));
       body.appendChild(row('Heat', gauge(m.heat)));
-      note('Targets warm bodies with line of sight. Blind behind walls; heat builds per shot.');
+      note('Targets warm bodies with line of sight. Blind behind walls, blind to cold cyst masses; heat builds per shot.');
       this.mkBtn(btns, 'Load slugs', () => { g.machines.loadAmmo(m, g.inv); this.renderMachine(); });
+      prioBtn();
     } else if (m.type === 'beacon') {
       body.appendChild(row('Status', m.running ? 'POWERED' : 'UNPOWERED'));
       body.appendChild(row('Registered', m.registered ? 'YES' : 'NO'));
@@ -404,6 +519,7 @@ export class HUD {
       note('A registered, powered, charged beacon recovers you at the moment of death. Charges are consumed. Power loss at the wrong moment is your problem, not the machine\'s.');
       this.mkBtn(btns, m.registered ? 'Unregister' : 'Register recovery', () => { m.registered = !m.registered; g.hud.updateRecovery(); this.renderMachine(); });
       this.mkBtn(btns, 'Load ampoule', () => { g.machines.loadCharge(m, g.inv); g.hud.updateRecovery(); this.renderMachine(); });
+      prioBtn();
     } else if (m.type === 'furnace') {
       body.appendChild(row('Fuel', gauge(m.fuel / 20, m.fuel.toFixed(0))));
       body.appendChild(row('Smelting', m.queue.length > 0 ? `${m.queue.length} item(s)` : 'idle'));
@@ -422,5 +538,83 @@ export class HUD {
     b.addEventListener('click', fn);
     wrap.appendChild(b);
     return b;
+  }
+
+  // ---------- sealed crate (§8.1 sealed storage / §9.1 storage) ----------
+  openChest(c, hit) {
+    this.chestOpen = c;
+    this.chestHit = hit;
+    this.show('chest-screen');
+    this.renderChest();
+  }
+
+  renderChest() {
+    const g = this.game;
+    const c = this.chestOpen;
+    if (!c) return;
+    const body = $('chest-body');
+    const btns = $('chest-buttons');
+    clear(body); clear(btns);
+    if (c.items.length === 0) body.appendChild(el('div', 'dim', 'Empty. What goes in here stops smelling like food.'));
+    // items keep their whole slot record (incl. tool wear) — a crate is not a
+    // repair bench. Slot-preserving take: place into an empty inventory slot.
+    const takeOne = (it) => {
+      if (it.dur != null || (itemDef(it.id)?.dur != null && it.n === 1)) {
+        const free = g.inv.slots.findIndex(s => !s);
+        if (free < 0) { g.toast('Inventory full.'); return false; }
+        g.inv.slots[free] = { id: it.id, n: it.n, ...(it.dur != null ? { dur: it.dur } : {}) };
+        c.items = c.items.filter(x => x !== it);
+        return true;
+      }
+      const overflow = g.inv.add(it.id, it.n);
+      it.n = overflow;
+      if (it.n <= 0) c.items = c.items.filter(x => x !== it);
+      return overflow === 0;
+    };
+    for (const it of [...c.items]) {
+      const line2 = el('div', 'recipe');
+      const left = el('div');
+      left.appendChild(el('div', 'r-name', `${it.n}× ${itemDef(it.id)?.name || it.id}`));
+      line2.appendChild(left);
+      const take = el('button', 'btn', 'Take');
+      take.addEventListener('click', () => { takeOne(it); this.renderChest(); this.updateHotbar(); });
+      line2.appendChild(take);
+      body.appendChild(line2);
+    }
+    this.mkBtn(btns, 'Store held stack', () => {
+      const s = g.inv.selectedSlot();
+      if (!s) { g.toast('Nothing in hand.'); return; }
+      const existing = s.dur == null && c.items.find(i => i.id === s.id && i.dur == null);
+      if (existing) existing.n += s.n; else c.items.push({ ...s });
+      g.inv.slots[g.inv.selected] = null;
+      this.renderChest(); this.updateHotbar();
+    });
+    this.mkBtn(btns, 'Take all', () => {
+      let stuck = false;
+      for (const it of [...c.items]) if (!takeOne(it)) stuck = true;
+      if (stuck) g.toast('Inventory full — some stayed in the crate.');
+      this.renderChest(); this.updateHotbar();
+    });
+    this.mkBtn(btns, 'Close', () => { this.closeAll(); g.requestLock(); });
+  }
+
+  // ---------- accessibility (§7.5) ----------
+  bindAccess() {
+    const g = this.game;
+    const opts = [
+      ['acc-distortion', 'reduceDistortion'],
+      ['acc-flashing', 'noFlashing'],
+      ['acc-audio', 'hallucinationAudio'],
+    ];
+    for (const [id, key] of opts) {
+      const box = $(id);
+      if (!box) continue;
+      box.checked = !!g.access[key];
+      box.addEventListener('change', () => {
+        g.access[key] = box.checked;
+        try { localStorage.setItem('infections-wake-access', JSON.stringify(g.access)); } catch { /* private mode */ }
+        this.updateSanityFx();
+      });
+    }
   }
 }

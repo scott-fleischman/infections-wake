@@ -163,6 +163,50 @@ const ITEM_GLYPHS = {
     ctx.beginPath(); ctx.moveTo(13, 9); ctx.lineTo(16, 13); ctx.lineTo(13, 17);
     ctx.lineTo(10, 13); ctx.closePath(); ctx.fill();
   },
+  steel_ingot(ctx, col) {
+    ITEM_GLYPHS.iron_ingot(ctx, col);
+    ctx.fillStyle = 'rgba(120,150,190,0.3)'; ctx.fillRect(9, 14.6, 9, 1.4);   // blued temper line
+  },
+  hide(ctx, col) {
+    ctx.fillStyle = hex(col);
+    ctx.beginPath(); ctx.moveTo(6, 6); ctx.quadraticCurveTo(13, 3, 20, 6);
+    ctx.quadraticCurveTo(23, 13, 20, 20); ctx.quadraticCurveTo(13, 23, 6, 20);
+    ctx.quadraticCurveTo(3, 13, 6, 6); ctx.closePath(); ctx.fill();           // pelt
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1.2;
+    for (const y of [10, 14, 18]) { ctx.beginPath(); ctx.moveTo(8, y); ctx.lineTo(18, y); ctx.stroke(); }
+  },
+  iron_armor(ctx, col) {
+    ctx.fillStyle = hex(col);
+    ctx.beginPath(); ctx.moveTo(7, 6); ctx.lineTo(19, 6); ctx.lineTo(21, 10);
+    ctx.lineTo(19, 21); ctx.lineTo(7, 21); ctx.lineTo(5, 10); ctx.closePath(); ctx.fill(); // chest plate
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(11, 6, 4, 4);            // collar
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(9, 9); ctx.lineTo(9, 19); ctx.stroke();       // rivet line
+    ctx.beginPath(); ctx.moveTo(17, 9); ctx.lineTo(17, 19); ctx.stroke();
+  },
+  relay_module(ctx, col) {
+    ctx.fillStyle = '#2a2e33'; ctx.fillRect(5, 8, 16, 12);                    // board
+    ctx.fillStyle = hex(col); ctx.fillRect(7, 10, 5, 5);                      // relay can
+    ctx.fillStyle = '#74c7c4'; ctx.fillRect(14, 10, 3, 3);                    // chip
+    ctx.fillStyle = '#9aa0a6';
+    for (const x of [6, 10, 14, 18]) ctx.fillRect(x, 20, 1.6, 3);             // pins
+    ctx.strokeStyle = 'rgba(224,168,62,0.8)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(13, 15); ctx.lineTo(19, 15); ctx.lineTo(19, 11); ctx.stroke(); // trace
+  },
+  filter_unit(ctx, col) {
+    ctx.fillStyle = '#3a4440'; ctx.fillRect(7, 5, 12, 16);                    // canister
+    ctx.fillStyle = hex(col);
+    for (let i = 0; i < 4; i++) ctx.fillRect(8.5, 7 + i * 3.4, 9, 1.8);       // filter pleats
+    ctx.fillStyle = '#24282e'; ctx.fillRect(6, 3, 14, 3); ctx.fillRect(6, 20, 14, 3); // end caps
+  },
+  sterilizer_charge(ctx, col) {
+    ctx.fillStyle = '#4a4438'; ctx.fillRect(9, 10, 8, 12);                    // canister
+    ctx.fillStyle = hex(col); ctx.fillRect(10, 12, 6, 6);                     // window
+    ctx.fillStyle = '#d94f4f'; ctx.fillRect(11.5, 5, 3, 5);                   // striker cap
+    ctx.strokeStyle = hex(col); ctx.lineWidth = 1.4;                          // vapor curls
+    ctx.beginPath(); ctx.moveTo(8, 8); ctx.quadraticCurveTo(5, 5, 7, 3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(18, 8); ctx.quadraticCurveTo(21, 5, 19, 3); ctx.stroke();
+  },
 };
 
 function paintMeat(ctx, color) {

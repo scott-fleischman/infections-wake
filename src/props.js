@@ -39,6 +39,11 @@ export class Props {
       opts.axis = this.doorAxis(x, y, z);
     }
     if (def.model === 'archive') opts.tint = Array.isArray(def.col) ? def.col[0] : def.col;
+    if (def.model === 'valve') {
+      const v = (this.game.world.poi.deep?.valves || []).find(v => v.x === x && v.y === y && v.z === z);
+      opts.open = v ? !!this.game.deep?.valves?.[v.index - 1] : false;
+    }
+    if (def.model === 'transit_gate') opts.open = !!this.game.transit?.restored;
     const group = buildProp(def.model, opts);
     group.position.set(x + 0.5, y, z + 0.5);
     group.userData.sweepSeed = (x * 7 + z * 13) % 10;
@@ -80,18 +85,20 @@ export class Props {
   update(dt) {
     this.t += dt;
     const g = this.game;
+    const MACHINE_KINDS = new Set(['generator', 'drill', 'lamp', 'beacon', 'turret', 'cradle',
+      'battery', 'switch', 'scrubber', 'uv', 'vibturret', 'sensor', 'maint', 'transit_panel']);
     for (const e of this.map.values()) {
       const state = { dt, running: true, aimYaw: null };
-      if (e.kind === 'generator' || e.kind === 'drill' || e.kind === 'lamp'
-        || e.kind === 'beacon' || e.kind === 'turret' || e.kind === 'cradle') {
+      if (MACHINE_KINDS.has(e.kind)) {
         const m = g.machines.get(e.x, e.y, e.z);
         state.running = !!(m && m.running);
         if (e.kind === 'beacon' && m) state.running = !!(m.running && m.registered && m.charges > 0);
-        if (e.kind === 'turret') {
+        if (e.kind === 'switch' && m) state.running = !!m.on; // lever + lamp follow the circuit
+        if (e.kind === 'turret' || e.kind === 'vibturret') {
           if (m && m._aim) state.aimYaw = Math.atan2(m._aim.x - (e.x + 0.5), m._aim.z - (e.z + 0.5));
           else if (!state.running) state.aimYaw = 0; // dead turret rests, no idle sweep
         }
-      } else if (e.kind === 'furnace') {
+      } else if (e.kind === 'furnace' || e.kind === 'kiln') {
         const f = g.furnaces.get(this.key(e.x, e.y, e.z));
         state.running = !!(f && f.fuel > 0 && f.queue.length > 0);
       }

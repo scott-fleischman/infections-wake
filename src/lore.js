@@ -9,6 +9,9 @@ export const ARCHIVES = {
     tag: 'ATMOSPHERIC / TACTICAL',
     meta: 'Project Lazarus · Clinical Annex · fragment recovered',
     body: `Intake log, Ward Seven. Subject received concentrated LZ-9 for crush trauma.
+LZ-9: an engineered bacterium assembled from six harmless strains and one
+extremophile recovered from a poisoned mine. It eats damaged tissue, seals
+ruptured vessels with fibrous biofilm, and holds failing organs together.
 Circulation returned within the hour. Consciousness did not.
 
 STANDING RULE, POSTED AT EVERY BED: Preservation is not revival.
@@ -34,11 +37,16 @@ We now log what the colonies respond to: heat, breath, fresh blood, vibration,
 electrical activity. Each colony acts alone. There is no shared mind, no signal
 between them. They only appear coordinated because they answer the same stimulus.
 
+Staff report false alarms, phantom footsteps, faces in the vents. The clinical
+term is neural instability — toxins, inflammation, no sleep, contaminated air.
+It is a wound like any other, and it heals like one.
+
 Recommendation: seal processing. Filter every vent. Assume anything that emits
 is a beacon.`,
-    unlock: 'Filtration and spore behavior logged. Signature overlays expanded. Bestiary: cyst transmission.',
-    bestiaryReveal: ['runner', 'machine_eater'],
+    unlock: 'Filtration research opened: scrubbers, UV, and cartridges are now fabricable at steel. Bestiary: cyst transmission.',
+    bestiaryReveal: ['runner', 'machine_eater', 'cyst_carrier'],
     overlay: 'all',
+    unlockFlag: 'filtration',
   },
   3: {
     id: 3,
@@ -56,10 +64,61 @@ loudest thing in the valley — heat, metal, nutrient film, signaling chemicals.
 To end the regional pressure: reach the three sterilization galleries and open
 each purge valve. Heat regulation. Sterilant. Flood. I have opened the first.
 I do not think I will reach the second. — M.V.`,
-    unlock: 'Objective updated: purge the regional reservoir. Deep Site marked. (Full expedition arrives in a later chapter.)',
+    unlock: 'Objective updated: purge the regional reservoir. Restore the transit relay station on the north plains.',
     bestiaryReveal: ['colony_host'],
     overlay: 'all',
   },
+  4: {
+    id: 4,
+    title: 'Relay Station K-4 — Duty Log',
+    tag: 'ATMOSPHERIC / TACTICAL',
+    meta: 'Project Lazarus · Containment Transit · final shift',
+    body: `The rail still holds pressure. Whatever else failed, the engineers built
+this part to outlive us. Checklist for restart is posted by the panel: two
+control relays, one filtration cartridge, external power to the intake bus.
+The line runs one place only — down, to the Deep Site.
+
+Fair warning, whoever reads this: the startup sequence is LOUD. Turbines,
+bulkheads, rail motors — every colony in the valley will hear it. Do not
+start the line until you are ready to hold this platform.`,
+    unlock: 'Transit restoration checklist logged: 2 relays, 1 filtration cartridge, powered intake — then hold the platform.',
+    bestiaryReveal: [],
+    overlay: null,
+  },
+  5: {
+    id: 5,
+    title: 'M. Venn — Gallery One',
+    tag: 'PROGRESSION',
+    meta: 'Project Lazarus · Deep Site · recovered beside human remains',
+    body: `I reached the first gallery. The valve turned. The heat exchangers
+screamed and died, exactly as designed — and everything warm in this complex
+became a torch in a dark room. I understand now why the protocol wanted three
+hands.
+
+The sequence matters: heat regulation first, then sterilant, then the flood.
+The sterilant corrodes unshielded electronics — power down what you carry, or
+lose it. The flood will push everything that still moves up and out. Be
+somewhere defensible.
+
+Whoever you are: my valve reset itself when the pressure dropped. You will
+have to open all three. Finish it. — M.V.`,
+    unlock: 'Purge protocol confirmed: open the three valves in sequence, then burn out what remains of the reservoir.',
+    bestiaryReveal: [],
+    overlay: null,
+  },
+};
+
+// §15.8 emotional continuity: the recurring shortwave operator. Broadcasts
+// arrive at story beats; the shack radio replays the latest with [F].
+export const RADIO = {
+  day2: '…anyone on this band? Saw smoke over the west valley. If you are real, keep your fires small at night. They follow warmth. — K.',
+  ironTier: '…that furnace glow last night — you are smelting. Good. Iron means a beacon. Build the beacon before you build the gun. — K.',
+  genRan: '…I can hear your generator from the ridge, which means everything else can too. Bury the cable. Switch it off when you sleep. — K.',
+  firstAssault: '…you held. First night anyone has held ground down there in years. The valley notices. So do I. — K.',
+  steelTier: '…the old foundry stacks are smoking again. Steel. You know what steel means? It means machines. Mind what machines mean here. — K.',
+  transitRestored: '…the whole basin shook when that rail spun up. If you are going down — the labs said three galleries, three valves. Come back up. Someone should. — K.',
+  purged: '…the hum is gone. First quiet night in a decade. I do not know what you did down there, but the lights on my ridge — I am not the only one who lit one tonight. — K.',
+  reclaim: '…heard the nests going quiet, one by one. Keep going. Leave the valley better than the Project left it. — K.',
 };
 
 export const SYNTH = {
@@ -84,7 +143,15 @@ export const BESTIARY = {
   drifter: { name: 'Drifter', known: 'Standard infected body. Batters accessible barriers to reach warmth and breath.' },
   runner: { name: 'Runner', known: 'Fast, fragile. Erupts toward movement and fresh blood; punishes open doors.' },
   machine_eater: { name: 'Machine eater', known: 'Drawn to running machinery — heat, current, and metal. Chews through power.' },
+  brute: { name: 'Brute', known: 'Mineralized mass on two legs. Ignores you to hammer foundations and plate. Walls are a delay, not an answer.' },
+  climber: { name: 'Climber', known: 'Hardened fingers, altered joints. Reads lit windows and rooflines as invitations. Overhangs stop it; walls do not.' },
+  burrower: { name: 'Burrower', known: 'Follows sustained vibration through soil, surfacing where the shaking is loudest. Watch for a line of disturbed earth.' },
+  cyst_carrier: { name: 'Cyst carrier', known: 'A body given over to spore packaging. Cold — warm-body turrets cannot see it. The film it seeds keeps working after it dies.' },
+  spitter: { name: 'Spitter', known: 'Expels contaminated fluid in an arc. Punishes exposed platforms and anything silhouetted against a light.' },
+  elite: { name: 'Elite strain', known: 'Two strains fused into one competent body. Only appears where the ecology is loud enough to feed it.' },
   colony_host: { name: 'Colony host', known: 'A tissue-fused colony mineralized into stone. A location problem, not a monster with a key.' },
+  kiln_host: { name: 'Kiln host', known: 'Tissue fused through an industrial kiln, cooking its own colony air. Purging it restores steel production at scale.' },
+  pump_host: { name: 'Pump host', known: 'A colony grown through a flooded pump gallery. Purging it drains the annex and exposes the filtration stores.' },
 };
 
 export class StoryLog {
@@ -108,7 +175,8 @@ export class StoryLog {
     this.game.onArchiveCataloged(a);
     this.game.toast(`Cataloged: ${a.title}`, 'important');
     this.game.toast(a.unlock, 'important');
-    if (this.cataloged.size === 3 && !this.synthUnlocked) {
+    // the First Wake assembles from the three CORE discoveries (§16.4)
+    if ([1, 2, 3].every(i => this.cataloged.has(i)) && !this.synthUnlocked) {
       this.synthUnlocked = true;
       this.entries.push({ title: SYNTH.title, tag: SYNTH.tag, body: SYNTH.body, synth: true });
       this.game.toast('Story Log assembled: THE FIRST WAKE', 'important');

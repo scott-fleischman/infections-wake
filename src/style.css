@@ -385,3 +385,22 @@ html, body {
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(140,180,150,0.25); }
 ::-webkit-scrollbar-track { background: rgba(0,0,0,0.3); }
+
+/* valley map (§16.3) */
+#map-wrap { max-height: 62vh; overflow: auto; border: 1px solid var(--panel-edge); background: #05070a; }
+#map-canvas { display: block; image-rendering: pixelated; }
+
+/* reservoir viability (§18.4) */
+#viability-panel .sig-bar.tall { height: 12px; margin: 6px 0; }
+#viability-panel #viability-bar { height: 100%; background: var(--red); transition: width 0.3s; }
+#viability-panel .panel-title { color: var(--red); }
+
+/* air-quality warning shares .warn styling with the power banner */
+
+/* accessibility options (§7.5) */
+#access-panel { margin-top: 14px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 10px; }
+#access-panel label { display: block; font-size: 12px; color: var(--ink-dim); margin: 5px 0; cursor: pointer; }
+#access-panel input { accent-color: var(--amber); margin-right: 7px; }
+
+/* sealed crate */
+#chest-body { max-height: 40vh; overflow-y: auto; }

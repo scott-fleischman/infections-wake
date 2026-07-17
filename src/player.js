@@ -80,8 +80,13 @@ export class Player {
     const g = this.game;
     this.hurtCooldown = Math.max(0, this.hurtCooldown - dt);
 
+    // swimming: body immersed in water changes the whole movement model
+    const feetId = g.world.get(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.4), Math.floor(this.pos.z));
+    this.inWater = feetId === B.WATER;
+
     // --- desired horizontal movement ---
-    const speed = this.sprinting && this.hunger > 5 ? PLAYER.sprint : PLAYER.walk;
+    let speed = this.sprinting && this.hunger > 5 ? PLAYER.sprint : PLAYER.walk;
+    if (this.inWater) speed *= 0.55;
     let mx = 0, mz = 0;
     if (this.keys['w']) mz -= 1;
     if (this.keys['s']) mz += 1;
@@ -92,14 +97,21 @@ export class Player {
     const w = moveBasis(mx, mz, this.yaw);
     const targetVx = w.x * speed, targetVz = w.z * speed;
     // smooth accel
-    const accel = this.onGround ? 14 : 4;
+    const accel = this.onGround ? 14 : this.inWater ? 8 : 4;
     this.vel.x += (targetVx - this.vel.x) * Math.min(1, accel * dt);
     this.vel.z += (targetVz - this.vel.z) * Math.min(1, accel * dt);
 
-    // jump
-    if (this.keys[' '] && this.onGround) { this.vel.y = PLAYER.jump; this.onGround = false; }
-    this.vel.y -= PLAYER.gravity * dt;
-    if (this.vel.y < -55) this.vel.y = -55;
+    // jump / swim
+    if (this.inWater) {
+      // buoyant: sink slowly, hold space to swim up; no fall damage in water
+      this.vel.y += (this.keys[' '] ? 5.5 : -2.5 - this.vel.y) * Math.min(1, 6 * dt);
+      this.vel.y = Math.max(-3, Math.min(4, this.vel.y));
+      this._fallStart = null;
+    } else {
+      if (this.keys[' '] && this.onGround) { this.vel.y = PLAYER.jump; this.onGround = false; }
+      this.vel.y -= PLAYER.gravity * dt;
+      if (this.vel.y < -55) this.vel.y = -55;
+    }
 
     this.onGround = false;
     // substep to avoid tunneling
@@ -218,9 +230,19 @@ export class Player {
   damage(amount, cause = '', silent = false) {
     if (this.game.state !== 'play') return;
     if (this.hurtCooldown > 0 && !silent) return;
+    // §11.1 combat branch: a carried iron harness absorbs part of each hit
+    // and wears out doing it (only real hits, not starvation/drowning ticks)
+    if (!silent && amount > 1) {
+      const worn = this.game.inv?.wearArmor?.(amount);
+      if (worn) amount *= (1 - worn);
+    }
     this.health -= amount;
     this.lastDamageT = this.game.t;
-    if (!silent) { this.hurtCooldown = 0.4; this.game.onPlayerHurt(cause); }
+    if (!silent) {
+      this.hurtCooldown = 0.4;
+      this.game.onPlayerHurt(cause);
+      this.game.sanity?.onInjury?.(amount); // §7.3 severe injury shakes stability
+    }
     if (this.health <= 0) { this.health = 0; this.game.onPlayerDeath(cause); }
   }
 

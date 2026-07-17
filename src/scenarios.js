@@ -49,6 +49,20 @@ function ironKit(g) {
   placeIfAir(g, sx + 1, surf + 1, sz - 1, B.FURNACE);
 }
 
+// Steel-age loadout: the kiln host is already purged, filtration research is
+// open, and the pack holds the loud half of the tech tree.
+function steelKit(g) {
+  g.bossState.kiln.dead = true;
+  g.unlocks.kilnRestored = true;
+  g.unlocks.filtration = true;
+  g.tiers.add('steel');
+  g.addValley('kilnRestored');
+  give(g, {
+    steel_ingot: 10, steel_pick: 1, steel_blade: 1, iron_armor: 1,
+    'b:40': 8, 'b:41': 1, 'b:42': 2, 'b:46': 2, continuity_core: 1,
+  });
+}
+
 // Find (or carve) a standable air pocket near an underground point.
 // minDist keeps the drop-in outside the colony chamber — closer spawns put
 // the tester in the host's reach before they can orient (died in playtest)
@@ -151,6 +165,72 @@ export const SCENARIOS = {
       g.player.pos.set(spot.x + 0.5, spot.y + 0.01, spot.z + 0.5);
       g.player.vel.set(0, 0, 0);
       setTime(g, 3, 0.4);
+    },
+  },
+  steel: {
+    name: 'Day 4 — steel age',
+    desc: 'Kiln reclaimed, steel in hand, filtration research open. The loud half of the tech tree begins.',
+    apply(g) {
+      sealShack(g);
+      ironKit(g);
+      steelKit(g);
+      g.addValley('firstAssault');
+      setTime(g, 4, 0.3);
+    },
+  },
+  transit: {
+    name: 'Day 5 — at the relay station',
+    desc: 'Relays and a filter in the pack, standing at the transit panel. Start the line when your defenses are ready.',
+    apply(g) {
+      sealShack(g);
+      ironKit(g);
+      steelKit(g);
+      give(g, { relay_module: 2, filter_unit: 1, 'b:22': 1, 'b:23': 12, coal: 20, turret_ammo: 80, 'b:26': 2, 'b:13': 20 });
+      g.addValley('firstAssault');
+      const t = g.world.poi.transit;
+      g.player.pos.set(t.x + 0.5, t.surf + 1.02, t.z + 0.5);
+      g.player.vel.set(0, 0, 0);
+      setTime(g, 5, 0.3);
+    },
+  },
+  deepsite: {
+    name: 'The Deep Site expedition',
+    desc: 'The rail runs. Standing in the entry hall with portable power and filtration — three galleries ahead.',
+    apply(g) {
+      sealShack(g);
+      ironKit(g);
+      steelKit(g);
+      g.transit.restored = true;
+      g.addValley('transitRestored');
+      g.addValley('firstAssault');
+      give(g, { 'b:41': 2, 'b:22': 1, 'b:23': 16, 'b:24': 4, coal: 24, 'b:44': 1, 'b:43': 1, sterilizer_charge: 4, suppressant: 4, cooked_meat: 8, 'b:38': 12, turret_ammo: 60, 'b:26': 1 });
+      const d = g.world.poi.deep;
+      g.player.pos.set(d.entry.x + 0.5, d.entry.y + 0.02, d.entry.z + 0.5);
+      g.player.vel.set(0, 0, 0);
+      setTime(g, 6, 0.35);
+    },
+  },
+  endgame: {
+    name: 'Reclamation — after the purge',
+    desc: 'The reservoir is silent and the valley is quieter. Two secondary sites remain on the map.',
+    apply(g) {
+      sealShack(g);
+      ironKit(g);
+      steelKit(g);
+      g.transit.restored = true;
+      g.deep.valves = [true, true, true];
+      // the vault growth is already burned out
+      for (const c of g.world.poi.deep.clusters) {
+        for (const [x, y, z] of c.cells) {
+          if (g.world.get(x, y, z) !== 0) { g.world.set(x, y, z, 0); g.sig.onBlockChanged(x, y, z, 0); }
+        }
+        c.live = 0;
+      }
+      g.deep.tissueLeft = 0;
+      g.deep.purged = true;
+      for (const f of ['transitRestored', 'deepPurged', 'firstAssault']) g.addValley(f);
+      give(g, { sterilizer_charge: 6, suppressant: 4, cooked_meat: 8, continuity_core: 1, 'b:28': 1 });
+      setTime(g, 9, 0.32);
     },
   },
 };

@@ -1,11 +1,16 @@
 import * as THREE from 'three';
-import { B, BLOCKS, MACHINES, ITEMS } from './config.js';
+import { B, BLOCKS, MACHINES, ITEMS, FUSE } from './config.js';
 
 // Machine + power-network manager. Generators burn fuel to produce power;
-// wires connect them into networks; consumers (lamp/drill/turret/beacon) draw
-// from a network by priority. Running machines emit signatures (§10.2).
+// wires (and closed switches) connect them into networks; consumers draw from
+// a network by priority, batteries buffer the difference, and sustained
+// overload blows a fuse (§10.1–10.2). Running machines emit signatures.
 
-const PRIORITY = { cradle: 0, beacon: 1, turret: 2, lamp: 3, drill: 4 };
+const PRIORITY = {
+  cradle: 0, beacon: 1, transit: 1, turret: 2, vibturret: 2, sensor: 2,
+  lamp: 3, scrubber: 3, uv: 3, drill: 4,
+};
+const PRIO_NAMES = { 0: 'CRITICAL', 5: 'NORMAL', 9: 'LOW' };
 
 export class Machines {
   constructor(game) {
@@ -21,57 +26,90 @@ export class Machines {
     const type = def.machine;
     if (!type) return;
     const m = { x, y, z, id, type, on: false, running: false };
-    if (type === 'generator') { m.fuel = 0; m.enabled = true; }
+    if (type === 'generator') { m.fuel = 0; m.enabled = true; m.fuseBlown = false; m.overloadT = 0; }
     if (type === 'drill') { m.buffer = {}; m.oreTarget = null; m.progress = 0; }
     if (type === 'turret') { m.heat = 0; m.ammo = 0; m.cd = 0; m.overheat = false; }
+    if (type === 'vibturret') { m.cd = 0; }
     if (type === 'beacon') { m.charges = 0; m.registered = false; }
-    if (type === 'cradle') { m.core = false; }
+    if (type === 'cradle') { m.core = false; m.selected = true; }
+    if (type === 'switch') { m.on = true; }
+    if (type === 'battery') { m.charge = 0; }
+    if (type === 'maint') { m.bank = 0; }  // repair-HP bank, loaded from planks
+    if (type === 'uv') { m.cystT = 1; }
+    if (type === 'transit') { m.relays = 0; m.filters = 0; }
     this.map.set(this.key(x, y, z), m);
     return m;
   }
+
+  // Cycle a machine's power priority (§10.2 priority groups): the player can
+  // pin critical systems ahead of comfort loads. Persisted with the machine.
+  cyclePriority(m) {
+    const cur = m.prio ?? 5;
+    m.prio = cur === 5 ? 0 : cur === 0 ? 9 : 5;
+    return PRIO_NAMES[m.prio];
+  }
+  prioOf(m) { return m.prio ?? PRIORITY[m.type] ?? 5; }
+  prioName(m) { return m.prio != null ? PRIO_NAMES[m.prio] : 'AUTO'; }
 
   remove(x, y, z) {
     const k = this.key(x, y, z);
     const m = this.map.get(k);
     if (m) {
       this.game.sig.removeDynamic('M' + k);
+      this.game.sig.removeDynamic('X' + k);   // exposed-cable hum dies with its generator
       this.game.lights.remove('M' + k);
+      this.game.lights.remove('UVM' + k);     // UV emitter light
       // drop machine contents
       if (m.buffer) for (const [id, n] of Object.entries(m.buffer)) if (n > 0) this.game.dropItemAt({ x: x + 0.5, y: y + 1, z: z + 0.5 }, id, n);
+      // a broken cradle gives its continuity core back — it is too rare to void
+      if (m.type === 'cradle' && m.core) this.game.dropItemAt({ x: x + 0.5, y: y + 1, z: z + 0.5 }, 'continuity_core', 1);
       this.map.delete(k);
     }
   }
 
   get(x, y, z) { return this.map.get(this.key(x, y, z)); }
 
-  // Is this cell a power conductor (wire) or a machine block?
-  isWire(x, y, z) { return this.game.world.get(x, y, z) === B.WIRE; }
+  // Is this cell a power conductor? Wires always; switches only while closed.
+  isConductor(x, y, z) {
+    const id = this.game.world.get(x, y, z);
+    if (id === B.WIRE) return true;
+    if (id === B.SWITCH) { const m = this.get(x, y, z); return !!(m && m.on); }
+    return false;
+  }
 
-  // Build wire networks and distribute generator power to consumers.
-  solvePower() {
+  // Build conductor networks and distribute power: generators feed consumers
+  // by priority, batteries absorb surplus and cover deficits, and sustained
+  // overload blows the network's generator fuses (§10.1).
+  solvePower(dt = 0) {
     // reset
     for (const m of this.map.values()) if (m) m.powered = false;
 
-    // Find connected wire components via BFS.
+    // Find connected conductor components via BFS.
     const wireComp = new Map(); // "x,y,z" -> compId
+    const exposedByComp = new Map(); // compId -> sky-exposed wire count
     let compId = 0;
     const world = this.game.world;
     const visitWire = (sx, sy, sz, id) => {
       const stack = [[sx, sy, sz]];
+      let exposed = 0;
       while (stack.length) {
         const [x, y, z] = stack.pop();
         const k = this.key(x, y, z);
         if (wireComp.has(k)) continue;
-        if (world.get(x, y, z) !== B.WIRE) continue;
+        if (!this.isConductor(x, y, z)) continue;
         wireComp.set(k, id);
+        // §10.2: exposed cable is a readable electrical signature; buried
+        // (covered) runs are quiet. Count open-sky conductor cells.
+        if (world.skyTop(x, z) <= y) exposed++;
         stack.push([x+1,y,z],[x-1,y,z],[x,y+1,z],[x,y-1,z],[x,y,z+1],[x,y,z-1]);
       }
+      exposedByComp.set(id, exposed);
     };
-    // Wire networks are discovered by flooding out from each machine's adjacent
-    // wires — every powered link necessarily touches a machine at both ends.
+    // Networks are discovered by flooding out from each machine's adjacent
+    // conductors — every powered link necessarily touches a machine somewhere.
     const seedWiresAround = (x, y, z) => {
       for (const [dx, dy, dz] of NEIGHBORS) {
-        if (world.get(x+dx, y+dy, z+dz) === B.WIRE) {
+        if (this.isConductor(x+dx, y+dy, z+dz)) {
           const k = this.key(x+dx, y+dy, z+dz);
           if (!wireComp.has(k)) { visitWire(x+dx, y+dy, z+dz, compId++); }
         }
@@ -90,7 +128,7 @@ export class Machines {
     const genComps = [];
     for (const m of this.map.values()) {
       if (!m || m.type !== 'generator') continue;
-      m.running = m.enabled && m.fuel > 0;
+      m.running = m.enabled && m.fuel > 0 && !m.fuseBlown;
       if (!m.running) continue;
       const comps = [...this.adjacentComps(m, wireComp)];
       if (comps.length === 0) {
@@ -101,35 +139,97 @@ export class Machines {
         genComps.push([m, comps[0]]);
       }
     }
-    // capacity per merged network
+    // capacity + generator list per merged network
     const capacity = new Map();
-    for (const [, c] of genComps) {
+    const gensByRoot = new Map();
+    for (const [g, c] of genComps) {
       const root = find(c);
       capacity.set(root, (capacity.get(root) || 0) + MACHINES.generator.powerOutput);
+      if (!gensByRoot.has(root)) gensByRoot.set(root, []);
+      gensByRoot.get(root).push(g);
     }
     const compOf = (c) => find(c);
 
-    // consumers per merged network (deduped — a consumer may touch many wires)
+    // consumers + batteries per merged network (deduped)
     const consumersByComp = new Map();
+    const batteriesByComp = new Map();
     for (const m of this.map.values()) {
       if (!m || m.type === 'generator') continue;
       const roots = new Set([...this.adjacentComps(m, wireComp)].map(compOf));
       for (const c of roots) {
-        if (!consumersByComp.has(c)) consumersByComp.set(c, []);
-        consumersByComp.get(c).push(m);
+        const bucket = m.type === 'battery' ? batteriesByComp : consumersByComp;
+        if (!bucket.has(c)) bucket.set(c, []);
+        bucket.get(c).push(m);
       }
     }
 
-    // distribute per component by priority
-    let totalCap = 0, totalDem = 0;
-    for (const [c, cons] of consumersByComp) {
-      let cap = capacity.get(c) || 0;
+    // distribute per component: generators first, then battery discharge
+    let totalCap = 0, totalDem = 0, totalStored = 0;
+    const roots = new Set([...consumersByComp.keys(), ...batteriesByComp.keys()]);
+    for (const root of roots) {
+      const cons = consumersByComp.get(root) || [];
+      const bats = batteriesByComp.get(root) || [];
+      let cap = capacity.get(root) || 0;
+      const genCap = cap;
       totalCap += cap;
-      cons.sort((a, b) => (PRIORITY[a.type] ?? 9) - (PRIORITY[b.type] ?? 9));
+      let batAvail = 0;
+      for (const b of bats) if (b.charge > 0.5) batAvail += Math.min(MACHINES.battery.dischargeRate, b.charge);
+      let batDrawn = 0, unserved = 0;
+      cons.sort((a, b) => this.prioOf(a) - this.prioOf(b));
+      let demand = 0;
       for (const m of cons) {
+        if (m.sterilizedT > 0) continue; // corroded offline (§18.3 valve 2)
         const draw = MACHINES[m.type].powerDraw;
-        totalDem += draw;
+        demand += draw;
         if (cap >= draw) { m.powered = true; cap -= draw; }
+        else if (batAvail - batDrawn >= draw) { m.powered = true; m.onBattery = true; batDrawn += draw; }
+        else unserved += draw;
+      }
+      totalDem += demand;
+      // integrate battery charge/discharge over this frame
+      if (dt > 0 && bats.length) {
+        if (batDrawn > 0) {
+          // drain proportionally from charged banks
+          let remaining = batDrawn * dt;
+          for (const b of bats) {
+            if (remaining <= 0 || b.charge <= 0) continue;
+            const take = Math.min(b.charge, remaining);
+            b.charge -= take; remaining -= take;
+          }
+        } else if (cap > 0) {
+          for (const b of bats) {
+            if (cap <= 0) break;
+            const room = MACHINES.battery.capacity - b.charge;
+            if (room <= 0) continue;
+            const rate = Math.min(MACHINES.battery.chargeRate, cap);
+            b.charge = Math.min(MACHINES.battery.capacity, b.charge + rate * dt);
+            cap -= rate;
+          }
+        }
+      }
+      for (const b of bats) totalStored += b.charge;
+      // §10.1 overload protection: consumers left unserved while demand far
+      // exceeds generation (batteries can't bridge it) blows the fuses.
+      const gens = gensByRoot.get(root) || [];
+      const overloaded = genCap > 0 && unserved > 0 && demand > genCap * FUSE.overloadRatio;
+      for (const g of gens) {
+        if (overloaded) {
+          g.overloadT = (g.overloadT || 0) + dt;
+          if (g.overloadT > FUSE.overloadSeconds && !g.fuseBlown) {
+            g.fuseBlown = true;
+            this.game.toast('FUSE BLOWN — generator overloaded. Replace the fuse at the generator.', 'bad');
+          }
+        } else g.overloadT = 0;
+      }
+      // exposed cable hums: the network's electrical signature scales with
+      // how much of its run is open to the sky (bury cable to silence it)
+      if (gens.length) {
+        let exposed = 0;
+        for (const [c, n] of exposedByComp) if (find(c) === root) exposed += n;
+        const g0 = gens[0];
+        const key = 'X' + this.key(g0.x, g0.y, g0.z);
+        if (exposed > 0) this.game.sig.setDynamic(key, g0.x, g0.y + 1, g0.z, { electrical: Math.min(0.6, exposed * 0.04) }, 34);
+        else this.game.sig.removeDynamic(key);
       }
     }
     // direct links (no wire): each generator's output is a real budget too
@@ -141,7 +241,7 @@ export class Machines {
     for (const [gen, cons] of directByGen) {
       let cap = MACHINES.generator.powerOutput;
       totalCap += cap;
-      cons.sort((a, b) => (PRIORITY[a.type] ?? 9) - (PRIORITY[b.type] ?? 9));
+      cons.sort((a, b) => this.prioOf(a) - this.prioOf(b));
       for (const c of cons) {
         if (c.powered) continue; // already fed by a wire network
         const draw = MACHINES[c.type].powerDraw;
@@ -150,7 +250,16 @@ export class Machines {
       }
     }
 
-    this.networkPower = { capacity: totalCap, demand: totalDem };
+    this.networkPower = { capacity: totalCap, demand: totalDem, stored: Math.round(totalStored) };
+  }
+
+  replaceFuse(m, inv) {
+    if (!m.fuseBlown) { this.game.toast('Fuse intact.'); return; }
+    const [id, n] = Object.entries(FUSE.repairCost)[0];
+    if (inv.count(id) < n) { this.game.toast(`Need ${n}× ${ITEMS[id].name} for a fuse.`); return; }
+    inv.remove(id, n);
+    m.fuseBlown = false; m.overloadT = 0;
+    this.game.toast('Fuse replaced. Mind the load this time.', 'important');
   }
 
   adjacentComps(m, wireComp) {
@@ -171,7 +280,7 @@ export class Machines {
   }
 
   update(dt) {
-    this.solvePower();
+    this.solvePower(dt);
     for (const m of this.map.values()) if (m) this.updateMachine(m, dt);
   }
 
@@ -179,18 +288,29 @@ export class Machines {
     const key = 'M' + this.key(m.x, m.y, m.z);
     const cfg = MACHINES[m.type];
     let running = false;
+    if (m.sterilizedT > 0) m.sterilizedT = Math.max(0, m.sterilizedT - dt);
 
     if (m.type === 'generator') {
       running = m.running;
       if (running) { m.fuel = Math.max(0, m.fuel - cfg.fuelPerSec * dt); if (m.fuel === 0) this.game.toast('Generator ran dry.', 'important'); }
+      if (!running) this.game.sig.removeDynamic('X' + this.key(m.x, m.y, m.z)); // exposed-cable hum dies with it
+    } else if (m.type === 'switch') {
+      running = m.on; // conductor state, not a power draw
+    } else if (m.type === 'battery') {
+      running = m.charge > 0.5;
     } else {
       running = m.powered;
     }
     m.running = running;
 
-    // signature + light emission
+    // signature + light emission. §18.3 valve 1: failed heat regulation makes
+    // every warm machine louder until the reservoir is purged.
     if (running && cfg.emits) {
-      this.game.sig.setDynamic(key, m.x, m.y, m.z, cfg.emits, cfg.radius);
+      let emits = cfg.emits;
+      if (this.game.deep?.heatFailed && !this.game.deep?.purged && emits.heat) {
+        emits = { ...emits, heat: emits.heat * 1.5 };
+      }
+      this.game.sig.setDynamic(key, m.x, m.y, m.z, emits, cfg.radius);
     } else {
       this.game.sig.removeDynamic(key);
     }
@@ -206,14 +326,110 @@ export class Machines {
       this.updateDrill(m, dt, running);
     } else if (m.type === 'turret') {
       this.updateTurret(m, dt, running);
+    } else if (m.type === 'vibturret') {
+      this.updateVibTurret(m, dt, running);
+    } else if (m.type === 'uv') {
+      this.updateUV(m, dt, running);
+    } else if (m.type === 'maint') {
+      this.updateMaint(m, dt);
     } else if (m.type === 'beacon') {
       if (running) this.game.lights.set(key, m.x + 0.5, m.y + 1, m.z + 0.5, 0x7fae62, 0.6, 6);
       else this.game.lights.remove(key);
     }
+    // scrubber/sensor/transit effects are queried by main.js/director — the
+    // solver already set their running state and emitters above
+  }
+
+  // Vibration turret (§9.4): senses movement through the ground — no line of
+  // sight needed, and it is the only defense that reads burrowers underground.
+  updateVibTurret(m, dt, running) {
+    m.cd = Math.max(0, m.cd - dt);
+    if (!running) { m._aim = null; return; }
+    const cfg = MACHINES.vibturret;
+    const origin = new THREE.Vector3(m.x + 0.5, m.y + 0.6, m.z + 0.5);
+    let best = null, bestD = cfg.range;
+    for (const inf of this.game.infected.list) {
+      if (inf.dead || inf.isFalse) continue;
+      const d = origin.distanceTo(new THREE.Vector3(inf.pos.x, inf.pos.y + 0.5, inf.pos.z));
+      if (d < bestD) { best = inf; bestD = d; }
+    }
+    m._aim = best ? { x: best.pos.x, y: best.pos.y + 0.5, z: best.pos.z } : null;
+    if (best && m.cd <= 0) {
+      best.takeHit(cfg.dmg, true, { x: m.x, y: m.y, z: m.z });
+      m.cd = cfg.fireRate;
+      this.game.spawnHitSpark(best.pos, 0xe0a83e);
+    }
+  }
+
+  // UV sterilizer (§9.4): burns exposed colony film and nearby infected with
+  // line of sight. Limited against deep tissue; useless through walls.
+  updateUV(m, dt, running) {
+    const key = 'M' + this.key(m.x, m.y, m.z);
+    if (!running) { this.game.lights.remove('UV' + key); return; }
+    const cfg = MACHINES.uv;
+    this.game.lights.set('UV' + key, m.x + 0.5, m.y + 1, m.z + 0.5, 0x8a5ad4, 0.7, cfg.range + 2);
+    const origin = new THREE.Vector3(m.x + 0.5, m.y + 1, m.z + 0.5);
+    for (const inf of this.game.infected.list) {
+      if (inf.dead || inf.isFalse) continue;
+      const d = origin.distanceTo(new THREE.Vector3(inf.pos.x, inf.pos.y + 0.8, inf.pos.z));
+      if (d > cfg.range) continue;
+      if (this.game.sig.wallAtten(origin.x, origin.y, origin.z, inf.pos.x, inf.pos.y + 0.8, inf.pos.z) < 0.95) continue;
+      inf.takeHit(cfg.dps * dt, true, { x: m.x, y: m.y, z: m.z }); // burned → attack the burner (§12.3)
+    }
+    // erode one cyst film block at a time within range
+    m.cystT -= dt;
+    if (m.cystT <= 0) {
+      m.cystT = 1 / cfg.cystPerSec;
+      const r = cfg.range;
+      outer:
+      for (let dx = -r; dx <= r; dx++)
+        for (let dy = -2; dy <= 2; dy++)
+          for (let dz = -r; dz <= r; dz++) {
+            const x = m.x + dx, y = m.y + dy, z = m.z + dz;
+            if (this.game.world.get(x, y, z) !== B.CYST) continue;
+            if (this.game.sig.wallAtten(origin.x, origin.y, origin.z, x + 0.5, y + 0.5, z + 0.5) < 0.95) continue;
+            this.game.world.set(x, y, z, B.AIR);
+            this.game.clearBlockCell(x, y, z, B.CYST);
+            break outer;
+          }
+    }
+  }
+
+  // Maintenance bench (§6.7): slowly heals damaged (not destroyed) structures
+  // nearby from a plank-fed repair bank. Manual emergency repair stays faster.
+  updateMaint(m, dt) {
+    if (m.bank <= 0) return;
+    const cfg = MACHINES.maint;
+    const g = this.game;
+    let budget = cfg.repairPerSec * dt;
+    for (const [key, hp] of g.blockHp) {
+      if (budget <= 0 || m.bank <= 0) break;
+      const [x, y, z] = key.split(',').map(Number);
+      if (Math.abs(x - m.x) > cfg.radius || Math.abs(y - m.y) > 4 || Math.abs(z - m.z) > cfg.radius) continue;
+      const def = BLOCKS[g.world.get(x, y, z)];
+      if (!def || !def.solid) { g.blockHp.delete(key); continue; }
+      const maxHp = (def.armor || 1) * (def.hardness || 1) * 8;
+      const heal = Math.min(budget, m.bank, maxHp - hp);
+      if (heal <= 0) { g.blockHp.delete(key); continue; }
+      budget -= heal; m.bank -= heal;
+      const nhp = hp + heal;
+      if (nhp >= maxHp) g.blockHp.delete(key); else g.blockHp.set(key, nhp);
+    }
+  }
+
+  loadPlanks(m, inv) {
+    if (inv.count('b:' + B.PLANK) <= 0) { this.game.toast('No planks to stock.'); return; }
+    inv.remove('b:' + B.PLANK, 1);
+    m.bank += MACHINES.maint.plankPerRepair;
+    this.game.toast('Maintenance stock loaded.');
   }
 
   updateDrill(m, dt, running) {
     if (!running) return;
+    // §10.3: a drill stops when full — output must be collected or it idles
+    const buffered = Object.values(m.buffer || {}).reduce((a, b) => a + b, 0);
+    if (buffered >= 24) { m.full = true; return; }
+    m.full = false;
     // find/keep an ore target below or adjacent
     if (!m.oreTarget || !this.isOre(m.oreTarget)) {
       m.oreTarget = this.findOre(m);
@@ -254,6 +470,7 @@ export class Machines {
     let best = null, bestD = cfg.range;
     for (const inf of this.game.infected.list) {
       if (inf.dead || inf.isFalse) continue;
+      if (inf.s.cold) continue; // §9.4 target-class rule: cold cyst masses are invisible to a warm-body turret
       const d = origin.distanceTo(new THREE.Vector3(inf.pos.x, inf.pos.y + 0.8, inf.pos.z));
       if (d > bestD) continue;
       const clear = this.game.sig.wallAtten(origin.x, origin.y, origin.z, inf.pos.x, inf.pos.y + 0.8, inf.pos.z);
@@ -263,7 +480,7 @@ export class Machines {
     m._aim = best ? { x: best.pos.x, y: best.pos.y + 0.8, z: best.pos.z } : null;
     if (m.overheat || m.ammo <= 0 || m.cd > 0) return;
     if (best) {
-      best.takeHit(cfg.dmg, true);
+      best.takeHit(cfg.dmg, true, { x: m.x, y: m.y, z: m.z }); // source → retaliation target (§12.3)
       m.ammo--; m.cd = cfg.fireRate; m.heat += cfg.heatPerShot;
       if (m.heat >= cfg.heatMax) { m.overheat = true; this.game.toast('Turret overheated.', 'important'); }
       this.game.spawnTracer(origin, new THREE.Vector3(best.pos.x, best.pos.y + 0.8, best.pos.z), 0x74c7c4);
@@ -289,6 +506,20 @@ export class Machines {
     if (inv.count('iron_ampoule') <= 0) { this.game.toast('No biotic ampoule.'); return; }
     inv.remove('iron_ampoule', 1); m.charges++;
     this.game.toast(`Beacon charged (${m.charges}).`, 'important');
+  }
+  // Install the rare continuity component in a cradle (§13.2).
+  loadCore(m, inv) {
+    if (m.core) { this.game.toast('Continuity core already seated.'); return; }
+    if (inv.count('continuity_core') <= 0) { this.game.toast('No continuity core. The reservoir vault held one.'); return; }
+    inv.remove('continuity_core', 1);
+    m.core = true;
+    // §13.2: only one cradle is active at a time — seating a core selects it
+    this.selectCradle(m);
+    this.game.toast('Continuity core seated. Keep it powered — at the moment you die, not after.', 'important');
+    this.game.hud.updateRecovery();
+  }
+  selectCradle(m) {
+    for (const o of this.map.values()) if (o && o.type === 'cradle') o.selected = o === m;
   }
   collect(m, inv) {
     let any = false, stuck = false;

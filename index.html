@@ -37,6 +37,8 @@
         <div class="sig-row hidden sig-adv"><span>CO₂</span><div class="sig-bar"><div id="sig-co2"></div></div></div>
         <div class="sig-row hidden sig-adv"><span>Blood</span><div class="sig-bar"><div id="sig-blood"></div></div></div>
         <div class="sig-row hidden sig-adv"><span>Electrical</span><div class="sig-bar"><div id="sig-electrical"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>Spores</span><div class="sig-bar"><div id="sig-spores"></div></div></div>
+        <div class="sig-row hidden sig-adv"><span>Metal</span><div class="sig-bar"><div id="sig-metal"></div></div></div>
       </div>
     </div>
 
@@ -50,6 +52,12 @@
         <div id="objectives"></div>
       </div>
       <div id="power-warning" class="panel warn hidden"></div>
+      <div id="air-warning" class="panel warn hidden"></div>
+      <div id="viability-panel" class="panel hidden">
+        <div class="panel-title">RESERVOIR VIABILITY</div>
+        <div class="sig-bar tall"><div id="viability-bar"></div></div>
+        <div class="row"><span class="dim">Not a mind. A source.</span><span id="viability-pct">100%</span></div>
+      </div>
     </div>
 
     <div id="assault-banner" class="hidden">
@@ -91,6 +99,14 @@
     </div>
   </div>
 
+  <!-- Valley map (§16.3 map annotations, §13.4 body markers) -->
+  <div id="map-screen" class="screen hidden">
+    <div class="screen-inner wide">
+      <h2>VALLEY MAP <span class="dim">— [M] close · marks appear as you survey</span></h2>
+      <div id="map-wrap"><canvas id="map-canvas"></canvas></div>
+    </div>
+  </div>
+
   <!-- Story log -->
   <div id="log-screen" class="screen hidden">
     <div class="screen-inner wide">
@@ -125,6 +141,15 @@
     </div>
   </div>
 
+  <!-- Sealed crate -->
+  <div id="chest-screen" class="screen hidden">
+    <div class="screen-inner">
+      <h2>SEALED CRATE</h2>
+      <div id="chest-body"></div>
+      <div class="btn-row" id="chest-buttons"></div>
+    </div>
+  </div>
+
   <!-- Pause -->
   <div id="pause-screen" class="screen hidden">
     <div class="screen-inner">
@@ -132,6 +157,12 @@
       <div class="btn-col">
         <button id="btn-resume" class="btn primary">Resume</button>
         <button id="btn-savequit" class="btn">Save &amp; quit to menu</button>
+      </div>
+      <div id="access-panel">
+        <div class="panel-title">ACCESSIBILITY <span class="dim">(presentation only — the costs stay)</span></div>
+        <label><input type="checkbox" id="acc-distortion" /> Reduce visual distortion</label>
+        <label><input type="checkbox" id="acc-flashing" /> Disable jitter &amp; flashing</label>
+        <label><input type="checkbox" id="acc-audio" checked /> Hallucination audio</label>
       </div>
       <div id="controls-help"></div>
     </div>

@@ -40,6 +40,15 @@ export const B = {
   COLONY: 32, CYST: 33, NEST: 34,
   ARCHIVE_1: 35, ARCHIVE_2: 36, ARCHIVE_3: 37,
   TORCH: 38, WOOD_WALL: 39,
+  // steel & electricity tier (§11.1)
+  STEEL_BLOCK: 40, BATTERY: 41, SWITCH: 42, SCRUBBER: 43, UV_EMITTER: 44,
+  VIB_TURRET: 45, SENSOR: 46, MAINT_BENCH: 47, CHEST: 48, TRAP: 49,
+  // regional containment transit + Deep Site (§17–18)
+  TRANSIT_HULL: 50, TRANSIT_PANEL: 51, TRANSIT_GATE: 52,
+  DEEP_WALL: 53, DEEP_FLOOR: 54, DEEP_LIGHT: 55, VALVE: 56, RESERVOIR_TISSUE: 57,
+  // industrial ruins / settlement (§4.3)
+  RUIN_WALL: 58, RUIN_FLOOR: 59, SCRAP: 60, KILN: 61,
+  ARCHIVE_4: 62, ARCHIVE_5: 63, RADIO: 64, DOC_SHELF: 65,
 };
 
 // Reverse lookup for debugging.
@@ -63,7 +72,7 @@ export const BLOCKS = {
   [B.PLANK]:      { name: 'Wood plank', solid: true, opaque: true, col: 0x8a6a3e, hardness: 1.0, tool: 'axe', drop: B.PLANK, flammable: true, place: true },
   [B.WOOD_WALL]:  { name: 'Timber wall', solid: true, opaque: true, col: [0x6b542f,0x7a6236,0x6b542f], hardness: 1.6, tool: 'axe', drop: B.WOOD_WALL, flammable: true, place: true },
   [B.STONE_BRICK]:{ name: 'Reinforced wall', solid: true, opaque: true, col: 0x656b72, hardness: 3.0, tool: 'pick', drop: B.STONE_BRICK, place: true, armor: 2 },
-  [B.IRON_BLOCK]: { name: 'Iron plating', solid: true, opaque: true, col: 0x9aa0a6, accent: 0xcfd3d6, hardness: 4.0, tool: 'pick', drop: B.IRON_BLOCK, place: true, armor: 3, metal: true },
+  [B.IRON_BLOCK]: { name: 'Iron plating', solid: true, opaque: true, col: 0x9aa0a6, accent: 0xcfd3d6, hardness: 4.0, tool: 'pick', drop: B.IRON_BLOCK, place: true, armor: 3, metal: true, emits: { metal: 0.08 } },
   [B.GLASS]:      { name: 'Window', solid: true, opaque: false, transparent: true, col: 0x9fd4e0, hardness: 0.4, drop: null, place: true },
 
   // `model:` — rendered as a detailed prop mesh (models.js) instead of a cube;
@@ -82,7 +91,7 @@ export const BLOCKS = {
   [B.DRILL]:      { name: 'Mining drill', solid: true, opaque: false, model: 'drill', col: [0x4a4e54,0x3a3e44,0x2f333a], accent: 0xc9524a, hardness: 3.2, drop: B.DRILL, place: true, interact: 'machine', machine: 'drill' },
   [B.TURRET]:     { name: 'Warm-body turret', solid: true, opaque: false, model: 'turret', col: [0x44484f,0x393d44,0x2f333a], accent: 0x74c7c4, hardness: 3.2, drop: B.TURRET, place: true, interact: 'machine', machine: 'turret' },
   [B.BEACON]:     { name: 'Field recovery beacon', solid: true, opaque: false, model: 'beacon', col: [0x3a4a44,0x2f3c38,0x24302c], accent: 0x7fae62, hardness: 3.0, drop: B.BEACON, place: true, interact: 'machine', machine: 'beacon' },
-  [B.CRADLE]:     { name: 'Lazarus cradle', solid: true, opaque: false, senseOpaque: true, model: 'cradle', col: [0x40404a,0x34343e,0x282832], accent: 0x9d8fd4, hardness: 4.0, place: true, interact: 'machine', machine: 'cradle' },
+  [B.CRADLE]:     { name: 'Lazarus cradle', solid: true, opaque: false, senseOpaque: true, model: 'cradle', col: [0x40404a,0x34343e,0x282832], accent: 0x9d8fd4, hardness: 4.0, drop: B.CRADLE, place: true, interact: 'machine', machine: 'cradle' },
 
   [B.LAB_WALL]:   { name: 'Lab bulkhead', solid: true, opaque: true, col: [0x5a6066,0x4e545a,0x42484e], hardness: Infinity },
   [B.LAB_FLOOR]:  { name: 'Lab plating', solid: true, opaque: true, col: [0x484e54,0x3e444a,0x363c42], hardness: Infinity },
@@ -99,6 +108,46 @@ export const BLOCKS = {
   [B.ARCHIVE_3]:  { name: "Venn's reservoir protocol", solid: false, opaque: false, transparent: true, col: 0xe8b878, light: 8, hardness: Infinity, archive: 3, interact: 'archive', slim: 0.28, model: 'archive' },
 
   [B.TORCH]:      { name: 'Torch', solid: false, opaque: false, transparent: true, col: 0xffb347, light: 12, hardness: 0.1, drop: B.TORCH, place: true, emits: { light: 0.4, heat: 0.15 }, slim: 0.1, model: 'torch' },
+
+  // --- steel & electricity tier (§11.1) ---
+  // Exposed metal has a chemistry signature (§5.2 metal channel).
+  [B.STEEL_BLOCK]:{ name: 'Steel plating', solid: true, opaque: true, col: 0x7e8894, accent: 0xaeb8c4, hardness: 5.0, tool: 'pick', toolMin: 1, drop: B.STEEL_BLOCK, place: true, armor: 5, metal: true, emits: { metal: 0.1 } },
+  [B.BATTERY]:    { name: 'Battery bank', solid: true, opaque: false, model: 'battery', col: [0x3a4048,0x30363e,0x262b31], accent: 0x74c7c4, hardness: 3.4, drop: B.BATTERY, place: true, interact: 'machine', machine: 'battery' },
+  [B.SWITCH]:     { name: 'Circuit switch', solid: false, opaque: false, transparent: true, col: 0xc07a2a, hardness: 0.4, drop: B.SWITCH, place: true, interact: 'switch', machine: 'switch', slim: 0.16, model: 'switch' },
+  [B.SCRUBBER]:   { name: 'Air scrubber', solid: true, opaque: false, model: 'scrubber', col: [0x44504c,0x3a4440,0x2f3835], accent: 0x86d4d0, hardness: 3.0, drop: B.SCRUBBER, place: true, interact: 'machine', machine: 'scrubber' },
+  [B.UV_EMITTER]: { name: 'UV sterilizer', solid: true, opaque: false, model: 'uv', col: [0x3e3a4e,0x343044,0x2a2738], accent: 0x8a5ad4, hardness: 3.0, drop: B.UV_EMITTER, place: true, interact: 'machine', machine: 'uv' },
+  [B.VIB_TURRET]: { name: 'Vibration turret', solid: true, opaque: false, model: 'vibturret', col: [0x4f4a44,0x443f3a,0x38342f], accent: 0xe0a83e, hardness: 3.2, drop: B.VIB_TURRET, place: true, interact: 'machine', machine: 'vibturret' },
+  [B.SENSOR]:     { name: 'Field sensor', solid: false, opaque: false, transparent: true, col: 0x74c7c4, hardness: 1.0, drop: B.SENSOR, place: true, interact: 'machine', machine: 'sensor', slim: 0.14, model: 'sensor' },
+  [B.MAINT_BENCH]:{ name: 'Maintenance bench', solid: true, opaque: false, model: 'maint', col: [0x5a5244,0x4c4538,0x3e392e], accent: 0xc9a58a, hardness: 2.4, drop: B.MAINT_BENCH, place: true, interact: 'machine', machine: 'maint' },
+  [B.CHEST]:      { name: 'Sealed crate', solid: true, opaque: false, model: 'chest', col: [0x6b542f,0x5d4526,0x4d3a22], hardness: 1.6, drop: B.CHEST, place: true, interact: 'chest' },
+  [B.TRAP]:       { name: 'Spike trap', solid: false, opaque: false, transparent: true, col: 0x8a8f96, hardness: 0.6, drop: B.TRAP, place: true, slim: 0.3, model: 'trap' },
+
+  // --- regional containment transit (§17) — hardened, indestructible ---
+  [B.TRANSIT_HULL]: { name: 'Containment hull', solid: true, opaque: true, col: [0x4e5a62,0x424e56,0x36424a], hardness: Infinity },
+  [B.TRANSIT_PANEL]:{ name: 'Transit control panel', solid: true, opaque: false, senseOpaque: true, model: 'transit_panel', col: [0x3a4048,0x2f353c,0x24282e], accent: 0xe0a83e, hardness: Infinity, interact: 'transit', machine: 'transit' },
+  [B.TRANSIT_GATE]: { name: 'Pressure rail gate', solid: true, opaque: false, senseOpaque: true, model: 'transit_gate', col: [0x4e5a62,0x424e56,0x36424a], accent: 0xd94f4f, hardness: Infinity, interact: 'gate' },
+
+  // --- Lazarus Deep Site (§18) ---
+  [B.DEEP_WALL]:  { name: 'Deep Site bulkhead', solid: true, opaque: true, col: [0x3e4a54,0x34404a,0x2a3640], hardness: Infinity },
+  [B.DEEP_FLOOR]: { name: 'Deep Site plating', solid: true, opaque: true, col: [0x323e48,0x2a343e,0x242e36], hardness: Infinity },
+  [B.DEEP_LIGHT]: { name: 'Deep Site light', solid: true, opaque: false, col: 0x9fc4d4, light: 12, hardness: Infinity, emits: { light: 0.25 } },
+  [B.VALVE]:      { name: 'Purge valve', solid: true, opaque: false, senseOpaque: true, model: 'valve', col: [0x5a5244,0x4c4538,0x3e392e], accent: 0x7fae62, hardness: Infinity, interact: 'valve' },
+  [B.RESERVOIR_TISSUE]: { name: 'Reservoir growth', solid: true, opaque: true, col: [0x8a9a6a,0x74845a,0x5e6c48], accent: 0xd4e0a8, hardness: 4.5, tool: 'pick', drop: null, tissue: true, emits: { heat: 0.35, spores: 0.5 } },
+
+  // --- industrial ruins & abandoned settlement (§4.3) ---
+  [B.RUIN_WALL]:  { name: 'Ruined concrete', solid: true, opaque: true, col: [0x6e6a64,0x625e58,0x54514c], hardness: 3.4, tool: 'pick', drop: B.RUIN_WALL },
+  [B.RUIN_FLOOR]: { name: 'Cracked slab', solid: true, opaque: true, col: [0x5e5b56,0x54514c,0x4a4742], hardness: 3.2, tool: 'pick', drop: null },
+  [B.SCRAP]:      { name: 'Machine scrap', solid: true, opaque: true, col: [0x5a5450,0x4e4844,0x423e3a], accent: 0x8a6a3e, hardness: 2.2, tool: 'pick', drop: null, scrap: true, emits: { metal: 0.15 } },
+  [B.KILN]:       { name: 'Industrial kiln', solid: true, opaque: false, senseOpaque: true, model: 'kiln', col: [0x6a4a3a,0x5a3e30,0x4a3226], accent: 0xff7030, hardness: Infinity, interact: 'kiln' },
+
+  // late archives (indestructible, cataloged like the lab set)
+  [B.ARCHIVE_4]:  { name: 'Relay station duty log', solid: false, opaque: false, transparent: true, col: 0xa8c4e0, light: 8, hardness: Infinity, archive: 4, interact: 'archive', slim: 0.28, model: 'archive' },
+  [B.ARCHIVE_5]:  { name: "Venn's last entry", solid: false, opaque: false, transparent: true, col: 0xe0a8a8, light: 8, hardness: Infinity, archive: 5, interact: 'archive', slim: 0.28, model: 'archive' },
+
+  // shortwave radio (§15.8 emotional continuity) — lives in the starting shack
+  [B.RADIO]:      { name: 'Shortwave radio', solid: false, opaque: false, transparent: true, col: 0xc9a58a, hardness: 0.8, drop: B.RADIO, place: true, interact: 'radio', slim: 0.24, model: 'radio' },
+  // cataloged documents can be kept and shelved (§16.1)
+  [B.DOC_SHELF]:  { name: 'Cataloged document', solid: false, opaque: false, transparent: true, col: 0xe8d8a8, hardness: 0.2, drop: B.DOC_SHELF, place: true, slim: 0.22, model: 'archive' },
 };
 
 // --- Item registry -------------------------------------------------------
@@ -128,6 +177,16 @@ export const ITEMS = {
   suppressant:  { name: 'Neural suppressant', color: 0x86d4d0, stack: 8, sanity: 30, desc: 'Restores neural stability.' },
   turret_ammo:  { name: 'Turret slugs', color: 0xc9a58a, stack: 99 },
   continuity_core:{ name: 'Continuity core', color: 0x9d8fd4, stack: 1, desc: 'Rare component. Powers a Lazarus Cradle.' },
+
+  // steel & advanced containment (§11.1)
+  steel_ingot:  { name: 'Steel ingot', color: 0x9aa4b0, stack: 99, desc: 'Smelted at the restored industrial kiln.' },
+  steel_pick:   { name: 'Steel pickaxe', color: 0x9aa4b0, tool: 'pick', tier: 2, speed: 6.0, dmg: 5, stack: 1, dur: 480 },
+  steel_blade:  { name: 'Steel blade', color: 0xaeb8c4, tool: 'sword', tier: 2, speed: 1, dmg: 14, stack: 1, dur: 420, reach: 4.0, spec: 'combat' },
+  iron_armor:   { name: 'Iron harness', color: 0xb8bcc0, stack: 1, armor: 0.3, dur: 160, desc: 'Worn while carried. Absorbs a third of each hit.' },
+  hide:         { name: 'Animal hide', color: 0x9a8a72, stack: 20 },
+  relay_module: { name: 'Control relay', color: 0xe0a83e, stack: 8, desc: 'Transit restoration component. Salvaged from machine scrap and laboratories.' },
+  filter_unit:  { name: 'Filtration cartridge', color: 0x86d4d0, stack: 8, desc: 'For scrubbers and the transit intake. Found where the pumps drowned.' },
+  sterilizer_charge: { name: 'Field sterilizer', color: 0xd4e0a8, stack: 8, desc: 'Use [RMB] on nests, cysts, and reservoir growth to sterilize a zone.' },
 };
 
 // Tool tier names for messaging.
@@ -172,16 +231,41 @@ export const RECIPES = [
   { id: 'turret_ammo', station: 'bench', cost: { stone_shard: 4 }, out: { turret_ammo: 8 }, label: 'Turret slugs', tierUnlock: 'iron' },
   { id: 'beacon', station: 'bench', cost: { iron_ingot: 8, 'b:23': 4 }, out: { 'b:27': 1 }, label: 'Field recovery beacon', tierUnlock: 'iron' },
 
+  // primitive extras
+  { id: 'trap', station: null, cost: { stick: 3, stone_shard: 4 }, out: { 'b:49': 2 }, label: 'Spike traps' },
+  { id: 'chest', station: 'bench', cost: { 'b:12': 6, fiber: 2 }, out: { 'b:48': 1 }, label: 'Sealed crate', desc: 'Sealed storage hides the scent of what is inside.' },
+  { id: 'iron_armor', station: 'bench', cost: { iron_ingot: 5, hide: 2 }, out: { iron_armor: 1 }, tierUnlock: 'iron', spec: 'Combat specialization' },
+  { id: 'maint_bench', station: 'bench', cost: { iron_ingot: 4, 'b:12': 6 }, out: { 'b:47': 1 }, label: 'Maintenance bench', tierUnlock: 'iron', spec: 'Defense specialization' },
+  { id: 'radio', station: 'bench', cost: { iron_ingot: 2, 'b:23': 1 }, out: { 'b:64': 1 }, label: 'Shortwave radio', tierUnlock: 'iron' },
+
+  // steel tier — steel itself smelts only at the restored industrial kiln (§11.3)
+  { id: 'steel_pick', station: 'bench', cost: { steel_ingot: 3, stick: 2 }, out: { steel_pick: 1 }, tierUnlock: 'steel' },
+  { id: 'steel_blade', station: 'bench', cost: { steel_ingot: 4, stick: 1 }, out: { steel_blade: 1 }, tierUnlock: 'steel', spec: 'Combat specialization' },
+  { id: 'steel_block', station: 'bench', cost: { steel_ingot: 3 }, out: { 'b:40': 2 }, label: 'Steel plating', tierUnlock: 'steel' },
+  { id: 'battery', station: 'bench', cost: { steel_ingot: 4, iron_ingot: 4, 'b:23': 2 }, out: { 'b:41': 1 }, label: 'Battery bank', tierUnlock: 'steel', spec: 'Automation' },
+  { id: 'switch', station: 'bench', cost: { iron_ingot: 1, 'b:23': 1 }, out: { 'b:42': 2 }, label: 'Circuit switch', tierUnlock: 'steel', spec: 'Automation' },
+  { id: 'scrubber', station: 'bench', cost: { steel_ingot: 4, filter_unit: 1 }, out: { 'b:43': 1 }, label: 'Air scrubber', tierUnlock: 'steel', spec: 'Filtration', needsUnlock: 'filtration' },
+  { id: 'uv', station: 'bench', cost: { steel_ingot: 3, 'b:15': 2 }, out: { 'b:44': 1 }, label: 'UV sterilizer', tierUnlock: 'steel', spec: 'Filtration', needsUnlock: 'filtration' },
+  { id: 'vibturret', station: 'bench', cost: { steel_ingot: 5, 'b:23': 2 }, out: { 'b:45': 1 }, label: 'Vibration turret', tierUnlock: 'steel', spec: 'Powered defense' },
+  { id: 'sensor', station: 'bench', cost: { steel_ingot: 2, 'b:23': 1 }, out: { 'b:46': 2 }, label: 'Field sensor', tierUnlock: 'steel', spec: 'Sensing' },
+  { id: 'cradle', station: 'bench', cost: { steel_ingot: 8, continuity_core: 1, 'b:23': 4 }, out: { 'b:28': 1 }, label: 'Lazarus cradle', tierUnlock: 'steel' },
+  { id: 'sterilizer_charge', station: 'bench', cost: { steel_ingot: 1, iron_ampoule: 1, coal: 2 }, out: { sterilizer_charge: 2 }, label: 'Field sterilizers', tierUnlock: 'steel', needsUnlock: 'filtration' },
+  { id: 'relay_module', station: 'bench', cost: { steel_ingot: 2, 'b:23': 2 }, out: { relay_module: 1 }, label: 'Control relay', tierUnlock: 'steel' },
+  { id: 'filter_unit', station: 'bench', cost: { steel_ingot: 1, fiber: 6 }, out: { filter_unit: 1 }, label: 'Filtration cartridge', tierUnlock: 'steel', needsUnlock: 'filtration' },
+
   // furnace smelting
   { id: 'smelt_iron', station: 'furnace', cost: { iron_ore_raw: 1 }, out: { iron_ingot: 1 }, smelt: true },
   { id: 'cook_meat', station: 'furnace', cost: { raw_meat: 1 }, out: { cooked_meat: 1 }, smelt: true },
+  // kiln smelting (restored industrial infrastructure, §10.3/§11.3)
+  { id: 'smelt_steel', station: 'kiln', cost: { iron_ingot: 1, coal: 2 }, out: { steel_ingot: 1 }, smelt: true },
 ];
 
 // --- Machine behavior ----------------------------------------------------
 export const MACHINES = {
   generator: {
     powerOutput: 12, fuelCapacity: 40, fuelPerSec: 0.08,
-    emits: { heat: 0.75, vibration: 0.45, electrical: 0.7, light: 0.1 },
+    // exhaust reads on the CO2 channel — combustion breathes out, loudly
+    emits: { heat: 0.75, vibration: 0.45, electrical: 0.7, light: 0.1, co2: 0.5 },
     radius: 42,
   },
   lamp:  { powerDraw: 1, light: 14, emits: { light: 0.5, electrical: 0.15 }, radius: 26, sanityAura: 6 },
@@ -192,11 +276,26 @@ export const MACHINES = {
   },
   beacon: { powerDraw: 2, emits: { electrical: 0.3 }, radius: 18 },
   cradle: { powerDraw: 5, emits: { electrical: 0.6, heat: 0.2 }, radius: 22 },
+
+  // steel tier
+  battery: { capacity: 60, chargeRate: 4, dischargeRate: 8, emits: { metal: 0.4, electrical: 0.2 }, radius: 20 },
+  switch:  { powerDraw: 0 },
+  scrubber:{ powerDraw: 2, radius: 22, cleanRadius: 9, emits: { electrical: 0.2 } },
+  uv:      { powerDraw: 2, range: 6, dps: 4, cystPerSec: 0.4, emits: { light: 0.3, electrical: 0.2 }, radius: 18 },
+  vibturret:{ powerDraw: 3, range: 10, fireRate: 0.8, dmg: 4, emits: { vibration: 0.6, electrical: 0.4 }, radius: 26 },
+  sensor:  { powerDraw: 1, confidenceBonus: 0.15, emits: { electrical: 0.1 }, radius: 12 },
+  maint:   { powerDraw: 0, repairPerSec: 6, radius: 8, plankPerRepair: 40 },
+  transit: { powerDraw: 8, relaysNeeded: 2, filtersNeeded: 1, emits: { electrical: 0.5, metal: 0.3 }, radius: 30 },
 };
+
+// Overload protection (§10.1 fuses): sustained demand above capacity blows the
+// network's fuse — everything stops until it is replaced at a generator.
+export const FUSE = { overloadRatio: 1.25, overloadSeconds: 8, repairCost: { iron_ingot: 1 } };
 
 // --- Signature channels & propagation (§5) ------------------------------
 export const SIGNATURE = {
-  channels: ['heat', 'light', 'vibration', 'co2', 'blood', 'electrical', 'spores'],
+  // all 8 spec channels (§5.2): metal = exposed iron/steel/batteries/scrap
+  channels: ['heat', 'light', 'vibration', 'co2', 'blood', 'electrical', 'spores', 'metal'],
   // How far a unit source spreads and how quickly it falls off.
   falloff: 1.0,
   // Player passive emissions (breath + warmth), scaled by activity.
@@ -224,16 +323,66 @@ export const STRAINS = {
   },
   machine_eater: {
     name: 'Machine eater', hp: 22, speed: 2.0, dmg: 7, color: 0x5a5a6a, scale: 1.15,
-    senses: { heat: 0.7, co2: 0.1, blood: 0.2, vibration: 0.8, light: 0.2, electrical: 1.0, spores: 0 },
-    thresholds: { investigate: 0.1, pursue: 0.25 }, blockDmg: 6, climbs: false, targetsMachines: true,
+    senses: { heat: 0.7, co2: 0.1, blood: 0.2, vibration: 0.8, light: 0.2, electrical: 1.0, spores: 0, metal: 0.9 },
+    thresholds: { investigate: 0.1, pursue: 0.25, frenzy: 0.85 }, blockDmg: 6, climbs: false, targetsMachines: true,
     desc: 'Follows heat, electrical fields, metal chemistry, and machine vibration. Prioritizes running machinery.',
   },
-  // vertical-slice miniboss: a mobile colony host that guards the iron seam.
+  // full-game roles (§12.2)
+  brute: {
+    name: 'Brute', hp: 64, speed: 1.3, dmg: 13, color: 0x7a6a4a, scale: 1.5, minDay: 4,
+    senses: { heat: 0.5, co2: 0.3, blood: 0.3, vibration: 0.7, light: 0.1, electrical: 0.2, spores: 0, metal: 0.4 },
+    thresholds: { investigate: 0.1, pursue: 0.25 }, blockDmg: 26, climbs: false,
+    desc: 'Slow, mineralized, and indifferent to you until the wall is gone. Damages foundations and reinforced blocks.',
+  },
+  climber: {
+    name: 'Climber', hp: 10, speed: 3.0, dmg: 5, color: 0x6a5a7a, scale: 0.9, minDay: 3,
+    senses: { heat: 0.4, co2: 0.6, blood: 0.4, vibration: 0.2, light: 0.9, electrical: 0.1, spores: 0 },
+    thresholds: { investigate: 0.1, pursue: 0.22, frenzy: 0.9 }, blockDmg: 2, climbs: true,
+    desc: 'Hardened fingers and altered joints. Reads lit windows and rooflines as invitations; walls are a route, not a barrier.',
+  },
+  burrower: {
+    name: 'Burrower', hp: 16, speed: 2.2, dmg: 6, color: 0x6a5434, scale: 1.05, minDay: 4,
+    senses: { heat: 0.2, co2: 0.2, blood: 0.1, vibration: 1.0, light: 0, electrical: 0.3, spores: 0 },
+    thresholds: { investigate: 0.08, pursue: 0.2 }, blockDmg: 5, climbs: false, burrows: true,
+    desc: 'Blind even by their standards. Follows sustained vibration through soil and gravel, leaving a line of disturbed earth.',
+  },
+  cyst_carrier: {
+    name: 'Cyst carrier', hp: 14, speed: 1.7, dmg: 3, color: 0x8a8a4a, scale: 1.05, minDay: 5, cold: true,
+    senses: { heat: 0.4, co2: 0.9, blood: 0.3, vibration: 0.1, light: 0.2, electrical: 0, spores: 0 },
+    thresholds: { investigate: 0.1, pursue: 0.24 }, blockDmg: 2, climbs: false, carrier: true,
+    desc: 'A body given over to spore packaging. Cold enough that warm-body turrets cannot see it. Seeds cyst film as it walks — and when it bursts.',
+  },
+  spitter: {
+    name: 'Spitter', hp: 12, speed: 2.0, dmg: 4, color: 0x7a8a4a, scale: 1.0, minDay: 5,
+    senses: { heat: 0.6, co2: 0.3, blood: 0.4, vibration: 0.2, light: 0.7, electrical: 0.4, spores: 0 },
+    thresholds: { investigate: 0.1, pursue: 0.22 }, blockDmg: 2, climbs: false,
+    ranged: { range: 11, cooldown: 2.4, dmg: 7, sanityHit: 2 },
+    desc: 'Expels contaminated fluid in a slow arc. Punishes exposed firing platforms and anything silhouetted against light.',
+  },
+  elite: {
+    name: 'Elite strain', hp: 90, speed: 3.4, dmg: 11, color: 0x8a4a5a, scale: 1.3, minDay: 8,
+    senses: { heat: 0.8, co2: 0.6, blood: 0.8, vibration: 0.6, light: 0.5, electrical: 0.7, spores: 0, metal: 0.5 },
+    thresholds: { investigate: 0.08, pursue: 0.18, frenzy: 0.7 }, blockDmg: 12, climbs: true, elite: true,
+    desc: 'Two strains fused into one competent body. Appears only where the ecology is loud enough to feed it.',
+  },
+  // ecological encounter hosts (§11.3) — location problems, not monsters with keys
   colony_host: {
     name: 'Colony host', hp: 220, speed: 1.1, dmg: 14, color: 0x8a9a5a, scale: 1.8,
     senses: { heat: 0.6, co2: 0.4, blood: 0.6, vibration: 0.5, light: 0.2, electrical: 0.4, spores: 0 },
     thresholds: { investigate: 0.08, pursue: 0.18 }, blockDmg: 10, climbs: false, boss: true,
     desc: 'A tissue-fused colony host mineralized into the cave wall. Removing it exposes the iron seam.',
+  },
+  kiln_host: {
+    name: 'Kiln host', hp: 300, speed: 1.2, dmg: 16, color: 0x9a6a4a, scale: 1.9,
+    senses: { heat: 0.8, co2: 0.4, blood: 0.5, vibration: 0.5, light: 0.3, electrical: 0.4, spores: 0, metal: 0.6 },
+    thresholds: { investigate: 0.08, pursue: 0.18 }, blockDmg: 14, climbs: false, boss: true,
+    desc: 'Tissue fused through an industrial kiln, cooking its own colony air. Purging it restores steel production at scale.',
+  },
+  pump_host: {
+    name: 'Pump host', hp: 180, speed: 1.4, dmg: 11, color: 0x5a8a8a, scale: 1.6,
+    senses: { heat: 0.5, co2: 0.6, blood: 0.6, vibration: 0.6, light: 0.2, electrical: 0.5, spores: 0 },
+    thresholds: { investigate: 0.08, pursue: 0.18 }, blockDmg: 8, climbs: false, boss: true,
+    desc: 'A colony grown through a flooded pump gallery. Purging it drains the annex and exposes the filtration stores.',
   },
 };
 
@@ -243,22 +392,55 @@ export const THREAT = {
   duskWarnFrac: 0.68,        // when the forecast becomes available
   incursionCooldown: 60,     // seconds between possible conditional incursions
   incursionSigThreshold: 1.6,// combined outdoor signature to trigger an incursion
-  // A major assault's composition is a "question" chosen by dominant signature.
+  scoutCooldown: 90,         // daytime scouts investigate a specific signature (§6.4)
+  nestIncursionRange: 26,    // an unresolved nest this close can seed an incursion
+  // A major assault's composition is a "question" (§6.5) chosen by dominant
+  // signature, gated by minDay and optional signature requirements (§22.2).
   assaults: [
-    { id: 'warm_tracks', tag: 'Heat-seekers', dominant: 'heat',
+    { id: 'warm_tracks', tag: 'Heat-seekers', dominant: 'heat', minDay: 1,
+      forecastTags: ['warm_tracks', 'condensation', 'heat_seekers'],
       base: { drifter: 5, runner: 2, machine_eater: 1 }, perDay: { drifter: 1.4, machine_eater: 0.5 },
       forecast: 'Warm tracks in the frost — bodies drawn to your heat.' },
-    { id: 'live_wire', tag: 'Machine eaters', dominant: 'electrical',
+    { id: 'live_wire', tag: 'Machine eaters', dominant: 'electrical', minDay: 1,
+      forecastTags: ['field_static', 'chewed_cable', 'machine_eaters'],
       base: { drifter: 3, runner: 2, machine_eater: 3 }, perDay: { machine_eater: 1.1, drifter: 0.8 },
       forecast: 'Field-sensitive strains converging on live circuits.' },
-    { id: 'blood_run', tag: 'Runners', dominant: 'blood',
+    { id: 'blood_run', tag: 'Runners', dominant: 'blood', minDay: 1,
+      forecastTags: ['blood_scent', 'fast_movers'],
       base: { drifter: 3, runner: 6 }, perDay: { runner: 1.6, drifter: 0.6 },
       forecast: 'Scent of blood on the wind — a fast, fragile swarm.' },
-    { id: 'baseline', tag: 'Mixed drift', dominant: null,
+    { id: 'wall_walkers', tag: 'Climbers', dominant: 'light', minDay: 3,
+      forecastTags: ['scratched_bark', 'roofline_shadows', 'climbers'],
+      base: { climber: 4, runner: 2, drifter: 2 }, perDay: { climber: 1.2, drifter: 0.5 },
+      forecast: 'Shapes on the treeline moving hand over hand. Check your roof.' },
+    { id: 'ground_swell', tag: 'Burrowers', dominant: 'vibration', minDay: 4,
+      requirements: { vibration: 0.35 },
+      forecastTags: ['disturbed_soil', 'subsonic', 'burrowers'],
+      base: { burrower: 3, drifter: 3, machine_eater: 1 }, perDay: { burrower: 0.9, drifter: 0.8 },
+      forecast: 'Lines of disturbed soil, all pointing here. They are under the grass.' },
+    { id: 'spore_bloom', tag: 'Cyst carriers', dominant: 'co2', minDay: 5,
+      forecastTags: ['spore_haze', 'cold_bodies', 'carriers'],
+      base: { cyst_carrier: 3, drifter: 4, climber: 1 }, perDay: { cyst_carrier: 0.8, drifter: 0.8 },
+      forecast: 'A haze of spores rides the evening air. Cold bodies walk beneath it — your turrets will not see them.' },
+    { id: 'siege', tag: 'Brutes', dominant: 'metal', minDay: 5,
+      forecastTags: ['deep_footfalls', 'brutes', 'suppressors'],
+      base: { brute: 2, drifter: 4, spitter: 2 }, perDay: { brute: 0.6, spitter: 0.6, drifter: 0.8 },
+      forecast: 'Heavy footfalls. Mineralized frames drawn to worked metal — they will test your foundations.' },
+    { id: 'baseline', tag: 'Mixed drift', dominant: null, minDay: 1,
+      forecastTags: ['scattered_drift'],
       base: { drifter: 5, runner: 2 }, perDay: { drifter: 1.2, runner: 0.5 },
       forecast: 'Scattered drift toward the strongest signals.' },
   ],
+  // §6.4 reservoir migration: rare, high-tier, forecast a day ahead.
+  migration: {
+    minDay: 8, chance: 0.35,
+    comp: { drifter: 6, runner: 3, brute: 2, elite: 1, machine_eater: 2 },
+    forecast: 'RESERVOIR MIGRATION — a mass movement from a contaminated site. This is not an ordinary night.',
+  },
   maxTier: 3,
+  // §19: after the reservoir is purged, regional pressure falls and enemy
+  // stats stay capped at the designed maximum — reclamation, not escalation.
+  postPurgePressure: 0.5,
 };
 
 // --- Sanity (§7) ---------------------------------------------------------
@@ -285,16 +467,45 @@ export const RECOVERY = {
 // --- Scoring / valley recovery (§14) ------------------------------------
 export const SCORE = {
   perDay: 100,
-  perKill: { drifter: 5, runner: 6, machine_eater: 10, colony_host: 400 },
-  perAssault: 150,
-  valley: {
-    archive: 8,        // each of 3
-    miniboss: 20,
-    firstAssault: 12,
-    ironTier: 8,
-    labFound: 6,
-    firstNightSurvived: 6,
+  perKill: {
+    drifter: 5, runner: 6, machine_eater: 10, brute: 14, climber: 7,
+    burrower: 9, cyst_carrier: 8, spitter: 9, elite: 40,
+    colony_host: 400, kiln_host: 500, pump_host: 350,
   },
+  perAssault: 150,
+  cleanDefense: 120,   // assault repelled with zero breached blocks (§14.2)
+  // Valley Recovery dimensions (§14.1). archive/survey flags are per-instance.
+  valley: {
+    archive: 5,          // each of 5
+    miniboss: 8,         // colony host
+    kilnRestored: 8,     // kiln host purged — steel at scale
+    annexDrained: 6,     // pump host purged — filtration recovered
+    firstAssault: 5,
+    ironTier: 4,
+    steelTier: 5,
+    labFound: 3,
+    survey: 2,           // each surveyed region (survey:<key> flags)
+    powerUptime: 4,      // 5 cumulative minutes of stable generator power
+    transitRestored: 10,
+    deepPurged: 20,
+    reclaim: 4,          // each secondary site sterilized (reclaim:<id> flags)
+    nightScale: 1,       // × highest defended night, capped at 10
+  },
+};
+
+// --- Deep Site purge sequence (§18) --------------------------------------
+export const DEEP = {
+  tissueClusters: 5,          // reservoir growth clusters = the viability meter
+  sterilantMachineDisableSec: 45, // valve 2 knocks running machines offline nearby
+  sterilantRadius: 30,
+  defendersPerCluster: 2,     // local tissue response when a cluster dies
+};
+
+// --- Accessibility defaults (§7.5) — persisted in localStorage ------------
+export const ACCESS_DEFAULTS = {
+  reduceDistortion: false,   // caps the sanity overlay intensity
+  noFlashing: false,         // disables jitter/flash effects
+  hallucinationAudio: true,  // separate toggle for phantom audio
 };
 
 export const PLAYER = {

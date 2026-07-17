@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WORLD, TIME, B, BLOCKS, ITEMS, SCORE, SANITY, RECOVERY, PLAYER, STRAINS } from './config.js';
+import { WORLD, TIME, B, BLOCKS, ITEMS, SCORE, SANITY, RECOVERY, PLAYER, STRAINS, MACHINES, DEEP, ACCESS_DEFAULTS } from './config.js';
 import { RNG } from './rng.js';
 import { World } from './world.js';
 import { Player } from './player.js';
@@ -8,12 +8,13 @@ import { Signature } from './signature.js';
 import { InfectedManager } from './infected.js';
 import { Machines } from './power.js';
 import { Props } from './props.js';
-import { buildGroundItem, buildBlockMesh, disposeGroup } from './models.js';
+import { buildGroundItem, buildBlockMesh, buildProp, disposeGroup } from './models.js';
 import { makeIcon } from './icons.js';
 import { Director } from './director.js';
 import { Sanity } from './sanity.js';
 import { Recovery } from './recovery.js';
-import { StoryLog, ARCHIVES } from './lore.js';
+import { StoryLog, ARCHIVES, RADIO } from './lore.js';
+import { ValleyMap } from './map.js';
 import { HUD } from './hud.js';
 import { GameAudio } from './audio.js';
 import { LightPool } from './light.js';
@@ -37,6 +38,10 @@ class Game {
     this.scene.fog = new THREE.Fog(0x9db4c8, 40, 190);
 
     this.audio = new GameAudio();
+    // accessibility (§7.5): presentation-only options, persisted per device.
+    // Loaded before the HUD binds its checkboxes.
+    this.access = { ...ACCESS_DEFAULTS };
+    try { Object.assign(this.access, JSON.parse(localStorage.getItem('infections-wake-access') || '{}')); } catch { /* defaults */ }
     this.hud = new HUD(this);
     this.lights = new LightPool(this.scene, 18);
 
@@ -64,6 +69,8 @@ class Game {
     this.uiTick = 0;
     this.hintStage = 0;
     this.cystClickT = 2;
+    this.projectiles = [];
+    this.valleyMap = new ValleyMap(this);
 
     this.bindInput();
     this.bindMenus();
@@ -159,6 +166,17 @@ class Game {
     this.hintStage = 0;
     this.scenarioKey = scenario || null; // scenario saves are marked (see boot guard)
     this.specCrafts = new Set();
+    // full-game campaign state (§17–19)
+    this.transit = { restored: false, siegeActive: false };
+    this.bossState = { kiln: {}, pump: {} };
+    this.deep = { valves: [false, false, false], heatFailed: false, flooded: false, purged: false };
+    this.stats = { powerUptime: 0, highestNight: 0, breachedThisAssault: false };
+    this.lastSleepDay = 1;
+    this.radioHeard = [];      // ordered broadcast keys (latest replays at the set)
+    this.docTaken = new Set(); // archive ids whose physical copy was pocketed
+    this.chests = new Map();   // "x,y,z" -> { items: [{id,n}] }
+    this.trapWear = new Map();
+    this.projectiles = [];
 
     this._loadedPlayerPos = false;
     if (data) this.loadInto(data);
@@ -180,6 +198,35 @@ class Game {
     this._pendingDropped = null;
     this.spawnCritters();
     this.buildEmergencyPad();
+
+    // world-generated machinery: the transit intake bus is a machine the power
+    // solver must see, and the restored kiln is a furnace-like block entity
+    const tp = this.world.poi.transit.panel;
+    if (!this.machines.get(tp.x, tp.y, tp.z)) this.machines.add(tp.x, tp.y, tp.z, B.TRANSIT_PANEL);
+    const kk = this.world.poi.ruin.kiln;
+    if (!this.furnaces.has(`${kk.x},${kk.y},${kk.z}`)) {
+      this.furnaces.set(`${kk.x},${kk.y},${kk.z}`, { x: kk.x, y: kk.y, z: kk.z, type: 'kiln', fuel: 0, queue: [], progress: 0, out: {} });
+    }
+    // Roane's outline in the vault — tragic evidence, not an enemy (§18.4)
+    if (this.roaneMesh) { this.scene.remove(this.roaneMesh); disposeGroup(this.roaneMesh); }
+    const rp = this.world.poi.deep.roane;
+    this.roaneMesh = buildProp('roane');
+    this.roaneMesh.position.set(rp.x + 0.5, rp.y, rp.z + 0.5);
+    this.scene.add(this.roaneMesh);
+    this._roaneSeen = false;
+
+    // reservoir viability = live tissue cells in the vault (§18.4); recount on
+    // load so broken tissue stays broken across save round-trips
+    const dp = this.world.poi.deep;
+    this.deep.tissueTotal = 0; this.deep.tissueLeft = 0;
+    for (const c of dp.clusters) {
+      let live = 0;
+      for (const [x, y, z] of c.cells) {
+        this.deep.tissueTotal++;
+        if (this.world.get(x, y, z) === B.RESERVOIR_TISSUE) { live++; this.deep.tissueLeft++; }
+      }
+      c.live = live;
+    }
     this.world.buildAll();
 
     this.state = 'play';
@@ -201,6 +248,12 @@ class Game {
     } else {
       this.toast('Recovered save. The valley remembers.', 'important');
     }
+
+    // reconcile: the tissue recount above is authoritative — a save written in
+    // a completed-but-unflagged state must still resolve the purge
+    if (this.deep.tissueLeft === 0 && this.deep.valves.every(Boolean) && !this.deep.purged) {
+      this.onReservoirPurged();
+    }
   }
 
   loadInto(d) {
@@ -215,6 +268,16 @@ class Game {
     this.beastSeen = new Set(d.beastSeen || []);
     this.bossDead = d.bossDead || false;
     this.pickupsTaken = new Set(d.pickupsTaken || []);
+    // full-game campaign state (absent in v1 saves — defaults hold)
+    if (d.transit) this.transit = { ...this.transit, ...d.transit, siegeActive: false };
+    if (d.deep) this.deep = { ...this.deep, ...d.deep };
+    if (d.stats) this.stats = { ...this.stats, ...d.stats, breachedThisAssault: false };
+    this.lastSleepDay = d.lastSleepDay ?? this.day;
+    this.radioHeard = d.radioHeard || [];
+    this.docTaken = new Set(d.docTaken || []);
+    this.bossState = d.bossState || {};
+    this.chests = new Map((d.chests || []).map(c => [`${c.x},${c.y},${c.z}`, { items: c.items || [] }]));
+    for (const [k, v] of Object.entries(d.blockHp || {})) this.blockHp.set(k, v); // scars persist (§6.7)
     this.world.applyEdits(d.edits || []);
     if (d.player) {
       this.player.pos.set(d.player.x, d.player.y, d.player.z);
@@ -240,6 +303,16 @@ class Game {
       for (const f of [0.75, 0.5, 0.25]) if (host.hp < host.s.hp * f) this.bossHpMarks.add(f);
     } else if (this.bossDead) {
       this.bossSpawned = true;
+    }
+    // same for the industrial and annex hosts (§11.3)
+    for (const [key, strain, poiKey] of [['kiln', 'kiln_host', 'ruin'], ['pump', 'pump_host', 'annex']]) {
+      const h = this.infected.list.find(i => i.strainKey === strain);
+      const st = this.bossState[key] = this.bossState[key] || {};
+      if (h) {
+        st.spawned = true;
+        const hs = this.world.poi[poiKey].hostSpawn;
+        h.home = { x: hs.x, y: hs.y, z: hs.z };
+      } else if (st.dead) st.spawned = true;
     }
     // dropped ground items (boss loot, spilled buffers) round-trip too;
     // applied after spawnPickups() resets the pickup list
@@ -330,7 +403,7 @@ class Game {
       grp.add(body, head);
       grp.position.set(x, y, z);
       this.scene.add(grp);
-      this.critters.push({ pos: new THREE.Vector3(x, y, z), mesh: grp, hp: 5, dir: rng.range(0, Math.PI * 2), moveT: 0 });
+      this.critters.push({ pos: new THREE.Vector3(x, y, z), mesh: grp, hp: 5, dir: rng.range(0, Math.PI * 2), moveT: 0, sigKey: 'CR' + i });
     }
   }
 
@@ -383,10 +456,11 @@ class Game {
         if (k === 'q') { this.inv.selected = (this.inv.selected + 1) % this.inv.hotbarCount; this.hud.updateHotbar(); }
         if (k === 'e') { this.openScreen('inv-screen'); return; }
         if (k === 'j') { this.openScreen('log-screen'); return; }
+        if (k === 'm') { this.openScreen('map-screen'); return; }
         if (k === 'f') this.interact();
         if (k === 'escape') this.pause();
       } else if (this.hud.isScreenOpen() && this.state === 'play') {
-        if (k === 'escape' || (k === 'e' && this.hud.activeScreen === 'inv-screen') || (k === 'j' && this.hud.activeScreen === 'log-screen')) {
+        if (k === 'escape' || (k === 'e' && this.hud.activeScreen === 'inv-screen') || (k === 'j' && this.hud.activeScreen === 'log-screen') || (k === 'm' && this.hud.activeScreen === 'map-screen')) {
           this.hud.closeAll(); this.requestLock();
         }
       }
@@ -446,6 +520,7 @@ class Game {
     this.hud.show(id);
     if (id === 'inv-screen') this.hud.renderInventory();
     if (id === 'log-screen') this.hud.renderLog();
+    if (id === 'map-screen') this.valleyMap.render();
   }
 
   requestLock() {
@@ -530,8 +605,10 @@ class Game {
 
   killCritter(c) {
     this.scene.remove(c.mesh);
+    this.sig.removeDynamic(c.sigKey);
     this.critters = this.critters.filter(x => x !== c);
     this.dropItemAt(c.pos, 'raw_meat', 1 + (Math.random() < 0.4 ? 1 : 0));
+    if (Math.random() < 0.6) this.dropItemAt({ x: c.pos.x + 0.5, y: c.pos.y, z: c.pos.z }, 'hide', 1);
     this.toast('Fresh meat. Fresh blood — the smell carries.', '');
   }
 
@@ -539,6 +616,13 @@ class Game {
     const held = this.player.heldItem();
     if (!held) return;
     const def = held.def;
+    // field sterilizer (§19): burn out nests, cyst film, and reservoir growth
+    if (held.id === 'sterilizer_charge') {
+      const hit = this.player.raycast();
+      if (hit) this.useSterilizer(hit);
+      this.hud.updateHotbar();
+      return;
+    }
     // consumables
     if (def.food) {
       this.player.feed(def.food);
@@ -597,8 +681,18 @@ class Game {
       if (def.machine === 'beacon') this.toast('Beacon placed. Register it and load an ampoule.', 'important');
     }
     if (id === B.FURNACE) this.furnaces.set(`${x},${y},${z}`, { x, y, z, type: 'furnace', fuel: 0, queue: [], progress: 0, out: {} });
+    if (id === B.CHEST) this.chests.set(`${x},${y},${z}`, { items: [] });
     if (id === B.TORCH || id === B.CAMPFIRE) this.refreshBlockLight(x, y, z, id);
     if (id === B.DOOR) this.unlocks.doorHung = true; // objectives (persisted via save)
+    // loose materials placed with nothing beneath settle immediately (§4.2)
+    if (BLOCKS[id]?.falls && this.world.get(x, y - 1, z) === B.AIR) {
+      let fy = y;
+      while (fy > 1 && this.world.get(x, fy - 1, z) === B.AIR) fy--;
+      if (fy !== y) {
+        this.world.set(x, y, z, B.AIR);
+        this.world.set(x, fy, z, id);
+      }
+    }
   }
 
   refreshBlockLight(x, y, z, id) {
@@ -627,6 +721,15 @@ class Game {
         this.furnaces.delete(key);
       }
     }
+    if (id === B.CHEST) {
+      const c = this.chests.get(key);
+      if (c) {
+        for (const it of c.items) this.dropItemAt({ x: x + 0.5, y, z: z + 0.5 }, it.id, it.n);
+        this.chests.delete(key);
+        if (this.hud.chestOpen === c) { this.hud.closeAll(); this.requestLock(); }
+      }
+    }
+    if (id === B.TRAP) this.trapWear.delete(key);
   }
 
   breakBlock(x, y, z, held) {
@@ -637,6 +740,7 @@ class Game {
     this.clearBlockCell(x, y, z, id);
     this.audio.breakBlock();
     this.inv.useToolDurability(1);
+    if (id === B.RESERVOIR_TISSUE) this.onTissueBroken(x, y, z);
     // drops
     const drop = this.dropFor(id);
     if (drop) {
@@ -671,6 +775,13 @@ class Game {
       case B.LEAVES: return Math.random() < 0.4 ? { id: Math.random() < 0.6 ? 'stick' : 'fiber', n: 1 } : null;
       case B.GRAVEL: return Math.random() < 0.45 ? { id: 'stone_shard', n: 1 } : { id: 'b:' + B.GRAVEL, n: 1 };
       case B.COLONY: return Math.random() < 0.25 ? { id: 'iron_ampoule', n: 1 } : null;
+      // dense salvage (§4.3): scrap yields the components ruins are for
+      case B.SCRAP: {
+        const r = Math.random();
+        if (r < 0.3) return { id: 'relay_module', n: 1 };
+        if (r < 0.65) return { id: 'iron_ingot', n: 1 + (Math.random() < 0.4 ? 1 : 0) };
+        return { id: 'coal', n: 2 };
+      }
       default:
         if (def2(id)?.drop != null) return { id: 'b:' + def2(id).drop, n: 1 };
         return null;
@@ -682,7 +793,21 @@ class Game {
     if (!hit) { this.tryEmergencyInteract(); return; }
     const def = BLOCKS[hit.id];
     if (def.archive) {
-      if (this.story.isCataloged(def.archive)) { this.toast('Already cataloged. Duplicates add nothing.'); return; }
+      if (this.story.isCataloged(def.archive)) {
+        // §16.1: the cataloged physical copy can be kept, shelved, or discarded
+        if (!this.docTaken.has(def.archive)) {
+          this.docTaken.add(def.archive);
+          this.world.set(hit.x, hit.y, hit.z, B.AIR);
+          this.clearBlockCell(hit.x, hit.y, hit.z, hit.id);
+          const over = this.inv.add('b:' + B.DOC_SHELF, 1);
+          if (over > 0) this.dropItemAt({ x: hit.x + 0.5, y: hit.y + 0.5, z: hit.z + 0.5 }, 'b:' + B.DOC_SHELF, over);
+          this.toast('Took the cataloged document. Shelve it, keep it, or leave it — the log holds the words.');
+          this.hud.updateHotbar();
+        } else {
+          this.toast('Already cataloged. Duplicates add nothing.');
+        }
+        return;
+      }
       this.pendingArchive = def.archive;
       const a = ARCHIVES[def.archive];
       $('catalog-title').textContent = a.title;
@@ -717,8 +842,283 @@ class Game {
         if (m) this.hud.openMachine(m);
         return;
       }
+      case 'switch': {
+        const m = this.machines.get(hit.x, hit.y, hit.z);
+        if (m) {
+          m.on = !m.on;
+          this.props.onBlockChanged(hit.x, hit.y, hit.z, hit.id); // flip the lever
+          this.audio.place();
+          this.toast(m.on ? 'Circuit closed.' : 'Circuit open — downstream is dark.');
+        }
+        return;
+      }
+      case 'chest': {
+        const c = this.chests.get(`${hit.x},${hit.y},${hit.z}`);
+        if (c) this.hud.openChest(c, hit);
+        return;
+      }
+      case 'transit': {
+        const m = this.machines.get(hit.x, hit.y, hit.z);
+        if (m) this.hud.openMachine(m);
+        return;
+      }
+      case 'gate': return this.useTransitGate(hit);
+      case 'valve': return this.useValve(hit);
+      case 'kiln': {
+        if (!this.bossState.kiln.dead) {
+          this.toast('The kiln is fused shut with living tissue. It breathes when you touch it.', 'bad');
+          if (!this.bossState.kiln.spawned) this.maybeSpawnBoss();
+          return;
+        }
+        const f = this.furnaces.get(`${hit.x},${hit.y},${hit.z}`);
+        if (f) this.hud.openMachine(f);
+        return;
+      }
+      case 'radio': return this.playRadio();
     }
     this.tryEmergencyInteract();
+  }
+
+  // ---------------- transit line (§17) ----------------
+  useTransitGate(hit) {
+    if (!this.transit.restored) {
+      this.toast('The pressure gate is sealed. The line needs relays, filtration, and power — check the panel.', 'important');
+      return;
+    }
+    const d = this.world.poi.deep;
+    const t = this.world.poi.transit;
+    const inDeep = this.player.pos.y < d.top + 2 && this.player.pos.x >= d.x0 - 2;
+    const dest = inDeep
+      ? { x: t.gate.x + 0.5, y: t.gate.y, z: t.gate.z + 1.5 }
+      : { x: d.entry.x + 0.5, y: d.entry.y + 0.02, z: d.entry.z + 0.5 };
+    $('night-fade').style.opacity = '1';
+    setTimeout(() => {
+      if (this.state !== 'play') return;
+      this.player.spawnAt(dest);
+      $('night-fade').style.opacity = '0';
+      this.toast(inDeep
+        ? 'The rail climbs. Daylight has never looked like this.'
+        : 'DECONTAMINATION SHAFT — the rail drops into the Lazarus Deep Site. It is loud down here, and warm.', 'important');
+      if (!inDeep) this.survey('deep');
+    }, 700);
+  }
+
+  startTransit(m) {
+    if (this.transit.restored || this.transit.siegeActive) return;
+    const cfg = MACHINES.transit;
+    if (m.relays < cfg.relaysNeeded || m.filters < cfg.filtersNeeded) { this.toast('The intake bus wants two relays and a filtration cartridge.'); return; }
+    if (!m.powered) { this.toast('The intake bus is dead. Run 8 kW to the panel.'); return; }
+    this.transit.siegeActive = true;
+    this.stats.breachedThisAssault = false;
+    // §17.3: the startup signature is extreme — and the valley answers
+    const t = this.world.poi.transit;
+    this.sig.setDynamic('TRANSIT', t.x, t.surf + 2, t.z, { vibration: 1.2, electrical: 1.0, heat: 0.6, metal: 0.8 }, 70);
+    const day = Math.max(5, this.day);
+    const comp = { drifter: 6 + Math.floor(day * 0.8), runner: 3, machine_eater: 3, brute: 2, climber: 2, spitter: 2 };
+    let spawned = 0;
+    for (const [k, n] of Object.entries(comp)) spawned += this.infected.spawnWave(k, n, { fromAssault: true });
+    this.director.assaultActive = true;
+    this.director.assaultDoneForNight = true;
+    this.director.remaining = spawned;
+    this.hud.showAssaultBanner(true);
+    this.toast('TRANSIT STARTUP — turbines, bulkheads, rail motors. Everything heard that. HOLD THE PLATFORM.', 'bad');
+    this.audio.assault();
+  }
+
+  finishTransitSiege() {
+    this.transit.siegeActive = false;
+    this.transit.restored = true;
+    this.sig.removeDynamic('TRANSIT');
+    this.addValley('transitRestored');
+    const t = this.world.poi.transit;
+    this.props.onBlockChanged(t.gate.x, t.gate.y, t.gate.z, B.TRANSIT_GATE); // doors part
+    this.toast('The platform holds. The rail settles into a steady hum — the DEEP SITE is open.', 'important');
+    this.addRadio('transitRestored');
+  }
+
+  // ---------------- purge valves (§18.3) ----------------
+  useValve(hit) {
+    const d = this.world.poi.deep;
+    const v = d.valves.find(v => v.x === hit.x && v.y === hit.y && v.z === hit.z);
+    if (!v) return;
+    const idx = v.index - 1;
+    if (this.deep.valves[idx]) { this.toast('The valve is open. The gallery did what it was built to do.'); return; }
+    if (idx > 0 && !this.deep.valves[idx - 1]) { this.toast(`No pressure. The protocol runs in sequence — open valve ${idx} first.`, 'important'); return; }
+    this.deep.valves[idx] = true;
+    this.props.onBlockChanged(v.x, v.y, v.z, B.VALVE); // wheel turns, lamp goes green
+    this.audio.bossRoar();
+    if (v.index === 1) {
+      // heat regulation fails: warm machinery becomes highly attractive
+      this.deep.heatFailed = true;
+      this.toast('VALVE ONE — the heat exchangers scream and die. Everything warm is a torch now.', 'bad');
+      this.spawnDeepWave({ drifter: 3, machine_eater: 2 }, v.x - 3, v.z + 3);
+    } else if (v.index === 2) {
+      // sterilant release: burns tissue AND corrodes running electronics
+      this.applySterilant(v);
+    } else {
+      // reservoir flood: displaced organisms ride the water up
+      this.floodVault();
+    }
+    SaveStore.write(this);
+  }
+
+  applySterilant(v) {
+    const d = this.world.poi.deep;
+    let cysts = 0;
+    for (let x = d.x0; x <= d.x1; x++)
+      for (let z = d.z0; z <= d.z1; z++)
+        for (let y = d.floor; y < d.top; y++) {
+          const id = this.world.get(x, y, z);
+          if (id === B.CYST || id === B.NEST) {
+            this.world.set(x, y, z, B.AIR);
+            this.clearBlockCell(x, y, z, id);
+            cysts++;
+          }
+        }
+    // exposed colony tissue chars; infected in the complex take a beating
+    for (const inf of this.infected.list) {
+      if (inf.isFalse || inf.dead) continue;
+      if (inf.pos.y < d.top + 2 && inf.pos.x >= d.x0 - 2 && inf.pos.x <= d.x1 + 2) inf.takeHit(inf.hp * 0.6, true);
+    }
+    // §18.3 valve two: unshielded RUNNING electronics corrode — machines the
+    // player powered down in time are spared
+    let fried = 0;
+    for (const m of this.machines.map.values()) {
+      if (!m || !m.running || m.type === 'transit') continue;
+      if (Math.hypot(m.x - v.x, m.y - v.y, m.z - v.z) > DEEP.sterilantRadius) continue;
+      m.sterilizedT = DEEP.sterilantMachineDisableSec;
+      fried++;
+    }
+    if (this.player.pos.y < d.top + 2 && this.player.pos.x >= d.x0 - 2) {
+      this.player.damage(8, 'sterilant burn');
+      this.sanity.addSuppressant(-4);
+    }
+    this.toast(`VALVE TWO — sterilant floods the galleries. ${cysts} growths burned out.` + (fried ? ` ${fried} running machine(s) corroded offline.` : ' Your electronics were safely dark.'), 'bad');
+  }
+
+  floodVault() {
+    const d = this.world.poi.deep;
+    // water rises through the vault and the third gallery (§18.3)
+    for (let x = 102; x <= d.x1; x++)
+      for (let z = d.z0; z <= d.z1; z++)
+        for (let y = d.floor; y <= d.floor + 1; y++) {
+          if (this.world.get(x, y, z) === B.AIR) this.world.set(x, y, z, B.WATER);
+        }
+    this.deep.flooded = true;
+    this.toast('VALVE THREE — the reservoir floods. Everything that still moves is coming UP.', 'bad');
+    this.spawnDeepWave({ drifter: 4, brute: 1, machine_eater: 1 }, 112, 14);
+    this.toast('Burn out the remaining growth. The meter on your HUD is its viability.', 'important');
+  }
+
+  // Spawn a wave inside the Deep Site near a point — routed through standable
+  // cells inside the complex (the sky-spawn validator has no meaning down here).
+  spawnDeepWave(comp, cx, cz) {
+    const d = this.world.poi.deep;
+    const ok = (x, y, z) =>
+      this.world.get(x, y, z) === B.AIR && this.world.get(x, y + 1, z) === B.AIR && this.world.get(x, y - 1, z) !== B.AIR;
+    const spots = [];
+    for (let r = 1; r <= 10 && spots.length < 12; r++)
+      for (let dx = -r; dx <= r; dx++)
+        for (let dz = -r; dz <= r; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+          for (let y = d.floor; y <= d.floor + 2; y++)
+            if (ok(cx + dx, y, cz + dz)) { spots.push({ x: cx + dx, y, z: cz + dz }); break; }
+        }
+    let i = 0;
+    for (const [k, n] of Object.entries(comp))
+      for (let j = 0; j < n && spots.length; j++) {
+        const s = spots[i++ % spots.length];
+        this.infected.spawn(k, s.x + 0.5, s.y, s.z + 0.5, {});
+      }
+  }
+
+  // ---------------- reservoir viability (§18.4) ----------------
+  onTissueBroken(x, y, z) {
+    const d = this.world.poi.deep;
+    const inDeep = x >= d.x0 && x <= d.x1 && z >= d.z0 && z <= d.z1 && y < d.top + 1;
+    if (!inDeep) return; // secondary-reservoir tissue is tracked by sterilization
+    for (const c of d.clusters) {
+      if (!c.cells.some(([cx, cy, cz]) => cx === x && cy === y && cz === z)) continue;
+      this.deep.tissueLeft = Math.max(0, this.deep.tissueLeft - 1);
+      c.live = Math.max(0, (c.live ?? c.cells.length) - 1);
+      if (c.live === 0 && !c.avenged) {
+        c.avenged = true;
+        this.spawnDeepWave({ drifter: DEEP.defendersPerCluster }, c.x, c.z);
+        this.toast('The vault answers — local tissue response!', 'bad');
+      }
+      break;
+    }
+    this.hud.updateViability();
+    if (this.deep.tissueLeft === 0 && this.deep.valves.every(Boolean) && !this.deep.purged) this.onReservoirPurged();
+    else if (this.deep.tissueLeft === 0 && !this.deep.valves.every(Boolean)) {
+      this.toast('The growth is cut back — but the reservoir systems still feed it. Open the purge valves.', 'important');
+    }
+  }
+
+  onReservoirPurged() {
+    this.deep.purged = true;
+    this.addValley('deepPurged');
+    this.addScore(1000);
+    this.toast('RESERVOIR VIABILITY: ZERO. The vault goes quiet.', 'important');
+    this.toast('The valley\'s loudest voice is gone. The infection remains — its durable source does not. Reclamation begins.', 'important');
+    this.addRadio('purged');
+    this.audio.bossRoar();
+    SaveStore.write(this);
+  }
+
+  // ---------------- shortwave radio (§15.8) ----------------
+  addRadio(key) {
+    if (!RADIO[key] || this.radioHeard.includes(key)) return;
+    this.radioHeard.push(key);
+    this.toast('SHORTWAVE — a new broadcast crackles on the shack radio. [F] to listen.', 'important');
+  }
+
+  playRadio() {
+    if (this.radioHeard.length === 0) { this.toast('Static. Whoever is out there is not talking right now.'); return; }
+    const key = this.radioHeard[this.radioHeard.length - 1];
+    this.toast('SHORTWAVE: ' + RADIO[key], 'important');
+    this.audio.falseAlarm?.();
+  }
+
+  // ---------------- field sterilization (§19) ----------------
+  useSterilizer(hit) {
+    const targets = new Set([B.NEST, B.CYST, B.RESERVOIR_TISSUE, B.COLONY]);
+    if (!targets.has(hit.id)) { this.toast('The sterilizer wants living growth — nests, film, tissue.'); return; }
+    this.inv.remove('sterilizer_charge', 1);
+    let cleared = 0;
+    for (let dx = -3; dx <= 3; dx++)
+      for (let dy = -3; dy <= 3; dy++)
+        for (let dz = -3; dz <= 3; dz++) {
+          const x = hit.x + dx, y = hit.y + dy, z = hit.z + dz;
+          const id = this.world.get(x, y, z);
+          if (!targets.has(id)) continue;
+          this.world.set(x, y, z, B.AIR);
+          this.clearBlockCell(x, y, z, id);
+          if (id === B.RESERVOIR_TISSUE) this.onTissueBroken(x, y, z);
+          cleared++;
+        }
+    this.spawnHitSpark({ x: hit.x, y: hit.y, z: hit.z }, 0xd4e0a8);
+    this.audio.breakBlock();
+    this.toast(`Sterilized — ${cleared} growth blocks burned out.`, 'important');
+    // §19: sterilizing a secondary reservoir permanently reduces pressure
+    for (const r of this.world.poi.reservoirs || []) {
+      if (this.valleyFlags.has('reclaim:' + r.id)) continue;
+      if (Math.hypot(r.x - hit.x, r.z - hit.z) < 8) {
+        let remaining = 0;
+        for (let dx = -4; dx <= 4; dx++)
+          for (let dy = -4; dy <= 4; dy++)
+            for (let dz = -4; dz <= 4; dz++) {
+              const id = this.world.get(r.x + dx, r.y + dy, r.z + dz);
+              if (id === B.NEST || id === B.RESERVOIR_TISSUE) remaining++;
+            }
+        if (remaining === 0) {
+          this.addValley('reclaim:' + r.id);
+          this.addScore(300);
+          this.toast('Secondary reservoir sterilized. This region will stay quieter — permanently.', 'important');
+          this.addRadio('reclaim');
+        }
+      }
+    }
   }
 
   tryEmergencyInteract() {
@@ -762,6 +1162,17 @@ class Game {
         return;
       }
     }
+    // severe contamination and a blown fuse also keep you awake (§8.3)
+    if (this.sanity.sporeExposure() > 0.4 && !this.nearScrubber()) {
+      this.toast('The air here crawls. You cannot sleep in a spore cloud.', 'bad');
+      return;
+    }
+    for (const m of this.machines.map.values()) {
+      if (m && m.type === 'generator' && m.fuseBlown) {
+        this.toast('The dead network gnaws at you. Replace the fuse first.', 'bad');
+        return;
+      }
+    }
     this._sleeping = true;
     $('night-fade').style.opacity = '1';
     setTimeout(() => {
@@ -771,8 +1182,11 @@ class Game {
       // advance to dawn
       const day0 = Math.floor(this.t / TIME.DAY_LENGTH);
       this.t = (day0 + 1) * TIME.DAY_LENGTH + TIME.DAWN * TIME.DAY_LENGTH + 1;
-      this.sanity.addSuppressant(SANITY.sleepGain);
+      // §8.1: a full belly makes for better sleep
+      const quality = 0.6 + 0.4 * (this.player.hunger / 100);
+      this.sanity.addSuppressant(SANITY.sleepGain * quality);
       this.player.hunger = Math.max(5, this.player.hunger - 8);
+      this.lastSleepDay = this.day + 1;
       this.director.onDawn();
       this.onNewDay();
       this.toast('You slept. Stability restored. A new day.', 'important');
@@ -806,18 +1220,23 @@ class Game {
   }
   updateFurnaces(dt) {
     for (const f of this.furnaces.values()) {
+      const isKiln = f.type === 'kiln';
+      if (isKiln && !this.bossState.kiln.dead) continue; // still occupied (§11.3)
       const burning = f.fuel > 0 && f.queue.length > 0;
       const key = 'F' + f.x + ',' + f.y + ',' + f.z;
       if (burning) {
         f.fuel = Math.max(0, f.fuel - dt);
         f.progress += dt;
-        this.sig.setDynamic(key, f.x, f.y, f.z, { heat: 0.55, light: 0.2 }, 12);
-        this.lights.set(key, f.x + 0.5, f.y + 0.6, f.z + 0.5, 0xff7030, 0.7, 7);
-        if (f.progress >= 4) {
+        // an industrial kiln runs hotter, faster, and much louder
+        const emits = isKiln ? { heat: 0.9, light: 0.3, co2: 0.4 } : { heat: 0.55, light: 0.2, co2: 0.2 };
+        this.sig.setDynamic(key, f.x, f.y, f.z, emits, isKiln ? 24 : 12);
+        this.lights.set(key, f.x + 0.5, f.y + 0.6, f.z + 0.5, 0xff7030, isKiln ? 1.1 : 0.7, isKiln ? 10 : 7);
+        if (f.progress >= (isKiln ? 2.5 : 4)) {
           f.progress = 0;
           const job = f.queue.shift();
           f.out[job.to] = (f.out[job.to] || 0) + 1;
           if (job.to === 'iron_ingot') this.maybeReachIron();
+          if (job.to === 'steel_ingot') this.maybeReachSteel();
         }
       } else {
         f.progress = 0;
@@ -831,7 +1250,16 @@ class Game {
     if (this.tiers.has('iron')) return;
     this.tiers.add('iron');
     this.addValley('ironTier');
+    this.addRadio('ironTier');
     this.toast('IRON FOUNDATION reached. New fabrication available: combat, defense, or productivity.', 'important');
+  }
+
+  maybeReachSteel() {
+    if (this.tiers.has('steel')) return;
+    this.tiers.add('steel');
+    this.addValley('steelTier');
+    this.addRadio('steelTier');
+    this.toast('STEEL & ELECTRICITY reached. Batteries, switches, sensors, filtration — and the Lazarus Cradle.', 'important');
   }
 
   // ------------------------------------------------------------------
@@ -851,6 +1279,10 @@ class Game {
     if (hp <= 0) {
       this.world.set(x, y, z, B.AIR);
       this.clearBlockCell(x, y, z, id);
+      if (this.director.assaultActive) this.stats.breachedThisAssault = true;
+      // viability accounting holds no matter WHO destroys reservoir growth —
+      // displaced infected chew tissue too (§18.4)
+      if (id === B.RESERVOIR_TISSUE) this.onTissueBroken(x, y, z);
       this.toast(def.machine ? `${def.name} destroyed!` : `${def.name} breached!`, 'bad');
       this.audio.breakBlock();
     } else {
@@ -863,6 +1295,36 @@ class Game {
     this.score += SCORE.perKill[inf.strainKey] || 5;
     this.hud.updateScore();
     if (inf.strainKey === 'colony_host') this.onBossKilled(inf);
+    if (inf.strainKey === 'kiln_host') this.onKilnHostKilled(inf);
+    if (inf.strainKey === 'pump_host') this.onPumpHostKilled(inf);
+  }
+
+  // §11.3: victory restores steel production at scale — the location changes.
+  onKilnHostKilled(inf) {
+    this.bossState.kiln.dead = true;
+    this.addValley('kilnRestored');
+    this.unlocks.kilnRestored = true;
+    this.dropItemAt({ x: inf.pos.x, y: inf.pos.y, z: inf.pos.z }, 'continuity_core', 1);
+    this.dropItemAt({ x: inf.pos.x + 0.6, y: inf.pos.y, z: inf.pos.z }, 'steel_ingot', 2);
+    this.toast('The kiln host sloughs away. The industrial kiln stands clear — steel can be smelted here.', 'important');
+    this.toast('It was carrying a CONTINUITY CORE — the heart of a Lazarus Cradle.', 'important');
+    this.audio.bossRoar();
+  }
+
+  // §11.3: purging the pump organism drains the annex and opens filtration.
+  onPumpHostKilled(inf) {
+    this.bossState.pump.dead = true;
+    this.addValley('annexDrained');
+    this.unlocks.filtration = true;
+    const a = this.world.poi.annex;
+    for (let x = a.x0 - 1; x <= a.x0 + a.w; x++)
+      for (let z = a.z0 - 2; z <= a.z0 + a.d; z++)
+        for (let y = a.floor - 1; y <= a.surf + 1; y++) {
+          if (this.world.get(x, y, z) === B.WATER) this.world.set(x, y, z, B.AIR);
+        }
+    this.toast('The pump gallery shudders — and drains. The filtration stores are exposed.', 'important');
+    this.toast('Filtration research is OPEN: scrubbers, UV sterilizers, and cartridges.', 'important');
+    this.audio.bossRoar();
   }
 
   onPlayerHurt(cause) {
@@ -873,6 +1335,14 @@ class Game {
   onAssaultCleared() {
     this.score += SCORE.perAssault;
     this.addValley('firstAssault');
+    this.addRadio('firstAssault');
+    // §14.2: a defense that never let a block break outscores a bloodbath
+    if (!this.stats.breachedThisAssault) {
+      this.score += SCORE.cleanDefense;
+      this.toast('Clean defense — nothing breached. Bonus logged.', 'important');
+    }
+    this.stats.breachedThisAssault = false;
+    if (this.transit.siegeActive) this.finishTransitSiege();
     this.hud.updateScore();
   }
 
@@ -888,8 +1358,12 @@ class Game {
     let v = 0;
     for (const f of this.valleyFlags) {
       if (f.startsWith('archive')) v += SCORE.valley.archive;
+      else if (f.startsWith('survey:')) v += SCORE.valley.survey;
+      else if (f.startsWith('reclaim:')) v += SCORE.valley.reclaim;
       else v += SCORE.valley[f] || 0;
     }
+    // §14.1 highest defended night contributes, capped
+    v += Math.min(10, this.stats?.highestNight || 0) * SCORE.valley.nightScale;
     return Math.min(100, v);
   }
 
@@ -913,19 +1387,40 @@ class Game {
     }
   }
 
-  // ---------------- boss ----------------
+  // ---------------- ecological encounters (§11.3) ----------------
   maybeSpawnBoss() {
-    if (this.bossDead || this.bossSpawned) return;
-    const c = this.world.poi.colony;
-    const d = Math.hypot(c.x - this.player.pos.x, c.y - this.player.pos.y, c.z - this.player.pos.z);
-    if (d < 22) {
-      const s = c.hostSpawn;
-      this.boss = this.infected.spawn('colony_host', s.x, s.y, s.z, {});
-      this.boss.home = { x: s.x, y: s.y, z: s.z };
-      this.bossSpawned = true;
-      this.beastSeen.add('colony_host');
-      this.audio.bossRoar();
-      this.toast('The wall is breathing. A colony host wakes.', 'bad');
+    // cave colony host (vertical slice)
+    if (!this.bossDead && !this.bossSpawned) {
+      const c = this.world.poi.colony;
+      const d = Math.hypot(c.x - this.player.pos.x, c.y - this.player.pos.y, c.z - this.player.pos.z);
+      if (d < 22) {
+        const s = c.hostSpawn;
+        this.boss = this.infected.spawn('colony_host', s.x, s.y, s.z, {});
+        this.boss.home = { x: s.x, y: s.y, z: s.z };
+        this.bossSpawned = true;
+        this.beastSeen.add('colony_host');
+        this.audio.bossRoar();
+        this.toast('The wall is breathing. A colony host wakes.', 'bad');
+      }
+    }
+    // kiln host at the industrial ruin, pump host in the flooded annex
+    for (const [key, strain, poiKey, wakeDist, msg] of [
+      ['kiln', 'kiln_host', 'ruin', 16, 'The kiln exhales. Something cooked itself into the brick — and it is waking.'],
+      ['pump', 'pump_host', 'annex', 10, 'The water moves against you. The pump gallery is not empty.'],
+    ]) {
+      const st = this.bossState[key] = this.bossState[key] || {};
+      if (st.dead || st.spawned) continue;
+      const poi = this.world.poi[poiKey];
+      const s = poi.hostSpawn;
+      const d = Math.hypot(s.x - this.player.pos.x, s.y - this.player.pos.y, s.z - this.player.pos.z);
+      if (d < wakeDist) {
+        const h = this.infected.spawn(strain, s.x, s.y, s.z, {});
+        h.home = { x: s.x, y: s.y, z: s.z };
+        st.spawned = true;
+        this.beastSeen.add(strain);
+        this.audio.bossRoar();
+        this.toast(msg, 'bad');
+      }
     }
   }
 
@@ -1041,6 +1536,107 @@ class Game {
     this.effects.push({ mesh: m, ttl: 0.25 });
   }
 
+  // A spitter's lobbed contaminated fluid (§12.2 ranged infected).
+  spawnSpit(inf, aim) {
+    const from = new THREE.Vector3(inf.pos.x, inf.pos.y + 1.1, inf.pos.z);
+    const to = new THREE.Vector3(aim.x, aim.y, aim.z);
+    const vel = to.clone().sub(from);
+    const flight = Math.max(0.35, vel.length() / 14);
+    vel.divideScalar(flight);
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0x9ab06a, transparent: true, opacity: 0.9 }));
+    mesh.position.copy(from);
+    this.scene.add(mesh);
+    this.projectiles.push({ mesh, vel, ttl: flight, dmg: inf.s.ranged.dmg, sanityHit: inf.s.ranged.sanityHit });
+    this.audio.dig();
+  }
+
+  updateProjectiles(dt) {
+    for (const p of this.projectiles) {
+      p.ttl -= dt;
+      p.mesh.position.addScaledVector(p.vel, dt);
+      const pos = p.mesh.position;
+      // wall stops it early
+      if (BLOCKS[this.world.get(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z))]?.solid) p.ttl = 0;
+      const dp = Math.hypot(pos.x - this.player.pos.x, pos.y - (this.player.pos.y + 1), pos.z - this.player.pos.z);
+      if (dp < 1.0) {
+        this.player.damage(p.dmg, 'contaminated spray');
+        this.sanity.addSuppressant(-(p.sanityHit || 0));
+        p.ttl = 0;
+      }
+      if (p.ttl <= 0) {
+        this.spawnHitSpark({ x: pos.x, y: pos.y - 1, z: pos.z }, 0x9ab06a);
+        this.scene.remove(p.mesh);
+        p.done = true;
+      }
+    }
+    this.projectiles = this.projectiles.filter(p => !p.done);
+  }
+
+  // Cyst film taking hold on a cell (carriers walking or bursting, §12.2).
+  placeContamination(x, y, z) {
+    if (this.world.get(x, y, z) !== B.AIR) return;
+    if (!BLOCKS[this.world.get(x, y - 1, z)]?.solid) return;
+    this.world.set(x, y, z, B.CYST);
+    this.sig.onBlockChanged(x, y, z, B.CYST);
+  }
+
+  // A burrower's passage churns the turf — a readable route marker (§12.2).
+  leaveDisturbance(x, z) {
+    const top = this.world.skyTop(x, z) - 1;
+    if (this.world.get(x, top, z) === B.GRASS) this.world.set(x, top, z, B.DIRT);
+  }
+
+  // Spike traps hurt real infected standing in them and wear out doing it.
+  updateTraps(dt) {
+    for (const inf of this.infected.list) {
+      if (inf.dead || inf.isFalse) continue;
+      const x = Math.floor(inf.pos.x), y = Math.floor(inf.pos.y), z = Math.floor(inf.pos.z);
+      if (this.world.get(x, y, z) !== B.TRAP) continue;
+      inf.takeHit(7 * dt, true);
+      const key = `${x},${y},${z}`;
+      const wear = (this.trapWear.get(key) || 0) + 7 * dt;
+      if (wear > 60) {
+        this.world.set(x, y, z, B.AIR);
+        this.clearBlockCell(x, y, z, B.TRAP);
+        this.toast('A spike trap splintered apart.');
+      } else this.trapWear.set(key, wear);
+    }
+  }
+
+  // Filtration queries (§9.4 filtered air): scrubbers clean a radius.
+  nearScrubber() {
+    for (const m of this.machines.map.values()) {
+      if (!m || m.type !== 'scrubber' || !m.running) continue;
+      if (Math.hypot(m.x - this.player.pos.x, m.y - this.player.pos.y, m.z - this.player.pos.z) < MACHINES.scrubber.cleanRadius) return true;
+    }
+    return false;
+  }
+  hasRunningSensor() {
+    for (const m of this.machines.map.values()) if (m && m.type === 'sensor' && m.running) return true;
+    return false;
+  }
+
+  // §14.1 regions surveyed — one-time Valley Recovery credit per region.
+  survey(key, label) {
+    const flag = 'survey:' + key;
+    if (this.valleyFlags.has(flag)) return;
+    this.addValley(flag);
+    if (label) this.toast(`Region surveyed: ${label}.`, 'important');
+  }
+
+  updateSurveys() {
+    const p = this.player.pos;
+    const near = (x, z, r) => Math.hypot(x - p.x, z - p.z) < r;
+    const poi = this.world.poi;
+    if (near(poi.ruin.x, poi.ruin.z, 12)) this.survey('ruin', 'industrial ruin');
+    if (near(poi.annex.x, poi.annex.z, 10)) this.survey('annex', 'flooded annex');
+    if (near(poi.settlement.x, poi.settlement.z, 12)) this.survey('settlement', 'abandoned settlement');
+    if (near(poi.transit.x, poi.transit.z, 10)) this.survey('transit', 'transit relay station');
+    if (near(poi.colony.x, poi.colony.z, 10) && Math.abs(poi.colony.y - p.y) < 6) this.survey('colony', 'colony seam');
+    for (const r of poi.reservoirs || []) if (near(r.x, r.z, 8)) this.survey(r.id, 'secondary reservoir');
+  }
+
   setMineOverlay(hit, progress = 0) {
     if (!this._mineBox) {
       this._mineBox = new THREE.Mesh(
@@ -1128,6 +1724,8 @@ class Game {
     this.day = Math.floor(this.t / TIME.DAY_LENGTH) + 1;
     this.score += SCORE.perDay;
     this.addValley('firstNightSurvived');
+    this.stats.highestNight = Math.max(this.stats.highestNight, this.day - 1); // §14.1
+    if (this.day >= 2) this.addRadio('day2');
     this.hud.updateScore();
     SaveStore.write(this);
   }
@@ -1169,6 +1767,8 @@ class Game {
     this.updatePickups(dt);
     this.updateCritters(dt);
     this.updateEffects(dt);
+    this.updateProjectiles(dt);
+    this.updateTraps(dt);
     this.maybeSpawnBoss();
     if (this.boss && !this.boss.dead) this.onBossDamaged(this.boss);
     this.updateSky();
@@ -1184,6 +1784,15 @@ class Game {
       if (this.sanity.sporeExposure() > 0.05) this.audio.cystClick();
     }
 
+    // Roane's outline: seen once, remembered (§15.4 — tragic evidence)
+    if (!this._roaneSeen) {
+      const rp = this.world.poi.deep.roane;
+      if (Math.hypot(rp.x - this.player.pos.x, rp.y - this.player.pos.y, rp.z - this.player.pos.z) < 7) {
+        this._roaneSeen = true;
+        this.toast('Elias Roane. What is left is scaffolding for a colony. Whatever person he was is absent.', 'important');
+      }
+    }
+
     // discovering the buried lab (valley recovery §14 + objective)
     if (!this.valleyFlags.has('labFound') && this.world.poi.lab) {
       const L = this.world.poi.lab;
@@ -1194,17 +1803,29 @@ class Game {
       }
     }
 
-    // generator ambience
+    // generator ambience + §14.1 stable-power-uptime credit
     let genRunning = false;
     for (const m of this.machines.map.values()) if (m && m.type === 'generator' && m.running) genRunning = true;
-    if (genRunning && !this.unlocks.genRan) this.unlocks.genRan = true; // persisted via save
+    if (genRunning) {
+      if (!this.unlocks.genRan) { this.unlocks.genRan = true; this.addRadio('genRan'); } // persisted via save
+      this.stats.powerUptime += dt;
+      if (this.stats.powerUptime > 300 && !this.valleyFlags.has('powerUptime')) this.addValley('powerUptime');
+    }
+    this.updateSurveys();
     const nearGen = genRunning && [...this.machines.map.values()].some(m => m && m.type === 'generator' && m.running &&
       Math.hypot(m.x - this.player.pos.x, m.z - this.player.pos.z) < 14);
     this.audio.setHum(nearGen, 0.05);
 
-    // power warnings
+    // power warnings + §20.1 air-quality warning
     const np = this.machines.networkPower;
-    this.hud.powerWarning(np.demand > np.capacity && np.demand > 0 ? `POWER SHORTFALL: ${np.demand}kW needed / ${np.capacity}kW available` : null);
+    let fuseOut = false;
+    for (const m of this.machines.map.values()) if (m && m.type === 'generator' && m.fuseBlown) fuseOut = true;
+    this.hud.powerWarning(fuseOut ? 'FUSE BLOWN — network dead until replaced at the generator'
+      : np.demand > np.capacity + (np.stored > 1 ? 8 : 0) && np.demand > 0
+        ? `POWER SHORTFALL: ${np.demand}kW needed / ${np.capacity}kW available` : null);
+    const spores = this.sanity.sporeExposure();
+    this.hud.airWarning(spores > 0.25 && !this.nearScrubber()
+      ? `AIR QUALITY: spore contamination ${spores > 0.6 ? 'SEVERE' : 'elevated'} — filter or leave` : null);
 
     // a machine panel open for a machine that no longer exists must close
     // (destroyed while the player was reading it — no stale duplication)
@@ -1232,6 +1853,7 @@ class Game {
       this.hud.updateRecovery();
       this.hud.updateSanityFx();
       this.hud.updateObjectives();
+      this.hud.updateViability();
     }
 
     // autosave
@@ -1250,6 +1872,16 @@ class Game {
       else if (def.interact === 'campfire') text = '[F] Cook / warm up';
       else if (def.interact === 'bench') text = '[F] Use crafting bench';
       else if (def.interact === 'furnace') text = '[F] Use furnace';
+      else if (def.interact === 'kiln') text = this.bossState.kiln.dead ? '[F] Industrial kiln — smelt steel' : 'Industrial kiln — fused shut with living tissue';
+      else if (def.interact === 'switch') { const m = this.machines.get(hit.x, hit.y, hit.z); text = `[F] Switch — ${m?.on ? 'CLOSED (conducting)' : 'OPEN (dark)'}`; }
+      else if (def.interact === 'chest') text = '[F] Sealed crate';
+      else if (def.interact === 'transit') text = '[F] Transit control panel';
+      else if (def.interact === 'gate') text = this.transit.restored ? '[F] Ride the pressure rail' : 'Pressure rail gate — sealed (restore the line)';
+      else if (def.interact === 'valve') {
+        const v = this.world.poi.deep.valves.find(v => v.x === hit.x && v.y === hit.y && v.z === hit.z);
+        text = v && this.deep.valves[v.index - 1] ? `Purge valve ${v.index} — OPEN` : `[F] Purge valve ${v?.index ?? ''}`;
+      }
+      else if (def.interact === 'radio') text = '[F] Shortwave radio' + (this.radioHeard.length ? ' — replay last broadcast' : '');
       else if (def.interact === 'machine') text = `[F] ${def.name}`;
       else if (def.hardness != null && def.hardness !== Infinity && !this.player.miningHeld) {
         // mineable readout: name + how to break it + best tool
@@ -1321,6 +1953,8 @@ class Game {
       } else c.dir += Math.PI;
       c.mesh.position.copy(c.pos);
       c.mesh.rotation.y = c.dir;
+      // §8.2: animals are warm and they breathe — a real (small) signature
+      this.sig.setDynamic(c.sigKey, c.pos.x, c.pos.y + 0.5, c.pos.z, { heat: 0.12, co2: 0.12 }, 10);
     }
   }
 

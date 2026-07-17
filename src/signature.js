@@ -60,6 +60,8 @@ export class Signature {
     // low sanity increases the player's bacterial shedding signature (§7.4)
     const san = this.game.sanity ? this.game.sanity.value : 100;
     if (san < 50) { const boost = (50 - san) / 50; e.co2 = (e.co2 || 0) + boost * 0.4; e.blood = (e.blood || 0) + boost * 0.3; }
+    // a running scrubber strips breath from the local air (§9.4 filtered vent)
+    if (e.co2 && this.game.nearScrubber?.()) e.co2 *= 0.35;
     this.playerEm.x = p.pos.x; this.playerEm.y = p.pos.y + 1; this.playerEm.z = p.pos.z;
     this.playerEm.e = e;
 
@@ -91,6 +93,7 @@ export class Signature {
       // senseOpaque: prop-rendered blocks (doors, furnaces) that still block
       // senses like a wall even though the mesher treats them as see-through
       if (d && (d.opaque || d.senseOpaque)) walls++;
+      else if (d && d.liquid) walls += 0.5; // water damps but does not seal (§5.3)
     }
     return Math.pow(SIGNATURE.wallAttenuation, Math.min(walls, 4));
   }

@@ -3,13 +3,14 @@
 A 3D voxel survival sandbox in the browser. Begin as a scavenger in a ruined
 valley, build an industrial refuge — and learn that every fire, lamp, drill,
 and generator you run makes you *louder* to a blind bacterial ecology that
-hunts by heat, breath, blood, vibration, and electrical current.
+hunts by heat, breath, blood, vibration, electrical current, and exposed metal.
 
-This is the playable **vertical slice** defined in
-[`Infections_Wake_Spec_v2_3D.md`](Infections_Wake_Spec_v2_3D.md) (§24):
-it exists to answer one question — *does a generator make you meaningfully
-safer while, for understandable biological reasons, making survival more
-dangerous?*
+This is the **full campaign** defined in
+[`Infections_Wake_Spec_v2_3D.md`](Infections_Wake_Spec_v2_3D.md): primitive →
+iron → steel & electricity → regional containment. Restore the buried transit
+line, survive its startup siege, descend into the Lazarus Deep Site, open the
+three purge galleries, and silence the reservoir — then keep playing into the
+reclamation endgame at a fixed maximum enemy tier.
 
 ## Run it
 
@@ -36,10 +37,10 @@ the original project input in the browser (no innerHTML — a small markdown
 renderer in `src/markdown.js`), with a PLAY NOW link back to the game.
 
 **Dev scenarios:** the start menu's DEV SCENARIOS strip (or
-`?scenario=<tooled|fortified|ironage|powered|lab|boss>[&seed=…]`) jumps to a
-story checkpoint with a matching world — tools granted, machines placed and
-fueled, player teleported. Scenario links never overwrite a real save; that
-takes an explicit menu click.
+`?scenario=<tooled|fortified|ironage|powered|lab|boss|steel|transit|deepsite|endgame>[&seed=…]`)
+jumps to a story checkpoint with a matching world — tools granted, machines
+placed and fueled, campaign flags set, player teleported. Scenario links never
+overwrite a real save; that takes an explicit menu click.
 
 ## Controls
 
@@ -51,9 +52,10 @@ takes an explicit menu click.
 | RMB | Place block / eat / use item |
 | 1–6, Q | Select hotbar slot |
 | E | Field kit (inventory + fabrication) |
-| F | Interact — doors, machines, archives, beds, campfires |
+| F | Interact — doors, machines, archives, beds, campfires, valves, the radio |
 | J | Story Log & bestiary |
-| Esc | Pause |
+| M | Valley map — marks appear as you survey |
+| Esc | Pause (accessibility options live here) |
 
 ## How to survive
 
@@ -71,9 +73,27 @@ takes an explicit menu click.
    fails.
 5. **The lab:** a buried Project Lazarus annex holds three archive fragments.
    Cataloging them updates the bestiary, unlocks signature instruments, and
-   assembles the story of the First Wake.
+   assembles the story of the First Wake. A collapsed service tunnel offers a
+   quieter way in for those who look.
 6. **The colony:** somewhere underground, a mineralized colony host seals a
    rich iron seam. Purging it changes the place — and drops what beacons need.
+7. **Steel:** an industrial ruin's kiln is fused shut with living tissue.
+   Purge the kiln host and steel smelts at scale — batteries, switches,
+   sensors, vibration turrets, and the Lazarus Cradle open up. Filtration
+   (scrubbers, UV, field sterilizers) is recovered from the flooded annex,
+   where a pump organism holds the drowned gallery.
+8. **The transit line:** a hardened relay station on the north plains still
+   holds rail pressure. Two control relays, one filtration cartridge, 8 kW to
+   the intake — and a startup loud enough that everything in the valley
+   answers. Hold the platform.
+9. **The Deep Site:** ride the rail down with portable power and filtration.
+   Three purge valves, in sequence: heat regulation fails (everything warm
+   becomes a torch), sterilant floods the galleries (power down or lose your
+   electronics), then the reservoir floods. What remains is Reservoir
+   Viability — burn it out while the vault answers back.
+10. **Reclamation:** the purge halves regional pressure permanently and enemy
+    tiers stay capped. Two secondary reservoirs remain on the map for field
+    sterilizers, and someone on a ridge keeps broadcasting.
 
 Sanity is purely a liability. Darkness, night exposure, and spores erode it;
 below 25 you'll see enemies that were never there (one verified hit dispels
@@ -93,6 +113,7 @@ Systems map 1:1 onto the spec's module list (§23):
 | `src/icons.js` | Canvas item-icon painter — shared by HUD + gallery |
 | `src/gallery.js` | `/gallery.html` model archive viewer |
 | `src/scenarios.js` | Dev checkpoints: story-stage worlds for playtesting |
+| `src/map.js` | Valley map `[M]` — earned annotations, body markers, facility diagrams |
 | `src/markdown.js` | Markdown → DOM renderer (no innerHTML) for the docs page |
 | `src/docs.js` | `/docs.html` field manual (README, spec, project input) |
 | `src/player.js` | First-person controller, AABB physics, DDA raycast |
@@ -114,12 +135,14 @@ presentation only, never simulation state.
 
 ## Testing
 
-`npm test` runs 97 headless tests (Node's built-in runner, no browser):
-movement math, worldgen determinism and structure placement, signature
-falloff/wall attenuation, the power solver, the recovery ladder, crafting,
-the threat director, an integration test where a machine eater
-gradient-follows an electrical emitter in pure Node, every dev scenario
-applied against real generated terrain, and the markdown renderer against
-the actual project documents. The sim layer never
+`npm test` runs 133 headless tests (Node's built-in runner, no browser):
+movement math, worldgen determinism and structure placement (including the
+transit station, Deep Site galleries, industrial ruin, flooded annex, and
+secondary reservoirs on multiple seeds), signature falloff/wall attenuation,
+the power solver (switches, batteries, fuses, player priorities, target-class
+rules), the recovery ladder, crafting, the threat director, an integration
+test where a machine eater gradient-follows an electrical emitter in pure
+Node, every dev scenario applied against real generated terrain, and the
+markdown renderer against the actual project documents. The sim layer never
 touches the DOM, so most behavior is checkable without playtesting;
 the browser is only needed to validate rendering and input.

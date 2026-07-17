@@ -34,6 +34,23 @@ const MACHINE_ENTRIES = [
   { key: 'door_open', name: 'Door (open)', kind: 'door', opts: { open: true }, desc: 'An open door is a corridor for smell, warmth and runners.' },
   { key: 'bed', name: 'Bed', kind: 'bed', desc: 'Sleep through a quiet night and restore stability. The forecast assault will not be slept through.' },
   { key: 'archive', name: 'Archive pedestal', kind: 'archive', opts: { tint: 0xe8d8a8 }, desc: 'A Project Lazarus record. Catalog it — duplicates add nothing; the record is never lost.' },
+  // steel tier (§11.1)
+  { key: 'battery', name: 'Battery bank', kind: 'battery', desc: 'Buffers surplus and bridges outages — scheduled operation. Stored metal has a chemistry signature; a full bank is a target.' },
+  { key: 'switch', name: 'Circuit switch', kind: 'switch', desc: 'Gates a cable run. Open the circuit and everything downstream goes dark — and quiet.' },
+  { key: 'scrubber', name: 'Air scrubber', kind: 'scrubber', desc: 'Strips spores and breath from the local air. Clean air steadies the mind and starves the CO₂ gradient.' },
+  { key: 'uv', name: 'UV sterilizer', kind: 'uv', desc: 'Burns exposed cyst film and tissue in line of sight. Limited against deep growth; useless through walls.' },
+  { key: 'vibturret', name: 'Vibration turret', kind: 'vibturret', desc: 'Reads movement through the ground — sees burrowers before they surface, and cold bodies the warm turret cannot.' },
+  { key: 'sensor', name: 'Field sensor', kind: 'sensor', desc: 'Steadies the dusk forecast and contradicts hallucinated alarms. Trust the instrument.' },
+  { key: 'maint', name: 'Maintenance bench', kind: 'maint', desc: 'Slowly heals damaged structures nearby from stocked planks. Manual repair stays faster in an emergency.' },
+  { key: 'chest', name: 'Sealed crate', kind: 'chest', desc: 'Sealed storage. What goes in stops smelling like food.' },
+  { key: 'trap', name: 'Spike trap', kind: 'trap', desc: 'A predictable surface approach deserves a predictable answer. Wears out; friendly feet beware.' },
+  // regional containment (§17–18)
+  { key: 'transit_panel', name: 'Transit control panel', kind: 'transit_panel', desc: 'The intake bus for the pressure rail: two relays, one filter cartridge, 8 kW — then a very loud startup.' },
+  { key: 'transit_gate', name: 'Pressure rail gate', kind: 'transit_gate', opts: { open: true }, desc: 'Hardened against contamination, blast, flood and collapse. It runs one place only: down.' },
+  { key: 'valve', name: 'Purge valve', kind: 'valve', desc: 'Three of these, in sequence: heat regulation, sterilant, flood. Venn opened the first. It reset.' },
+  { key: 'kiln', name: 'Industrial kiln', kind: 'kiln', desc: 'Restored foundry infrastructure — steel at scale, heat and exhaust to match. Not a machine you hide.' },
+  { key: 'radio', name: 'Shortwave radio', kind: 'radio', desc: 'Someone on a ridge, still broadcasting. Regional recovery matters to more people than you.' },
+  { key: 'roane', name: 'Subject L-01 (evidence)', kind: 'roane', desc: 'Elias Roane. What remains is scaffolding for a colony — whatever person he was is absent. Not an enemy. Evidence.' },
 ];
 
 const machineStats = (key) => {

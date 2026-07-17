@@ -17,10 +17,10 @@ export class Recovery {
   // Evaluate the best currently-valid recovery option.
   bestOption() {
     const g = this.game;
-    // cradle — steel-tier device, not craftable in the vertical slice (§24.3
-    // defers it), but the ladder honors one if a future tier places it.
+    // cradle — steel-tier spawn machine (§13.2). Only the SELECTED cradle is
+    // active; it must hold a core and be powered at the moment of death.
     for (const m of g.machines.map.values()) {
-      if (m && m.type === 'cradle' && m.core && m.running) return { kind: 'cradle', m };
+      if (m && m.type === 'cradle' && m.core && m.running && m.selected !== false) return { kind: 'cradle', m };
     }
     // beacon
     for (const m of g.machines.map.values()) {
@@ -36,7 +36,7 @@ export class Recovery {
     let cradle = null, beacon = null;
     for (const m of g.machines.map.values()) {
       if (!m) continue;
-      if (m.type === 'cradle') cradle = m;
+      if (m.type === 'cradle' && (!cradle || m.selected !== false)) cradle = m;
       if (m.type === 'beacon' && m.registered) beacon = m;
     }
     if (cradle) {
