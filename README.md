@@ -26,6 +26,15 @@ Chromium-based browsers and Firefox work; WebGL required.
 (`.github/workflows/deploy.yml` — tests must pass first):
 <https://scott-fleischman.github.io/infections-wake/>
 
+**Play offline on Windows 10:** `npm run dist:win` produces a self-contained
+`Infections-Wake-Windows/` folder (built game + a zero-dependency local
+server). Copy or zip it to any Windows 10 machine and double-click
+`Play-InfectionsWake.bat` — it serves the game locally and opens your browser.
+It uses Node.js if present, otherwise a pure PowerShell server that ships with
+Windows, so **nothing needs to be installed**. (A local server is required
+because ES-module browser games can't run from a `file://` page.) The launcher
+sources live in `windows/`; the assembler is `scripts/build-windows-dist.mjs`.
+
 **Model archive:** `/gallery.html` (linked from the start menu) is a viewer
 for every model in the game — machines, infected specimens, blocks, ground
 litter, item icons, and seeded tree generation — rendered with the exact same

@@ -1,3 +1,6 @@
 .DS_Store
 node_modules/
 dist/
+
+# assembled Windows distribution (build artifact of `npm run dist:win`)
+Infections-Wake-Windows/

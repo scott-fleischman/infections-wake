@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "dist:win": "vite build && node scripts/build-windows-dist.mjs",
     "test": "node --test \"test/**/*.test.js\""
   },
   "keywords": [],
