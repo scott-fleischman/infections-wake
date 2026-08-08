@@ -2,19 +2,29 @@
 // Autosaves happen at safe boundaries (pause, interval, dawn). Writes go
 // through a shadow key first so a crash mid-write can't corrupt the only copy.
 
+import { WORLD, TIME } from './config.js';
+
 const KEY = 'infections-wake-save-v1';
 const SHADOW_KEY = 'infections-wake-save-shadow';
 const FAILED_KEY = 'infections-wake-failed-v1';
-const VERSION = 2;
+const OLD_WORLD_KEY = 'infections-wake-save-oldworld';
+const VERSION = 3;
 
 export const SaveStore = {
-  has() { return localStorage.getItem(KEY) != null; },
+  // A save "exists" only if it is loadable — read() archives incompatible
+  // ones as a side effect, so the Continue button never leads to a surprise
+  // fresh world.
+  has() { return this.read() != null; },
 
   write(game) {
     try {
       const data = {
         version: VERSION,
         savedAt: Date.now(),
+        // world identity: terrain regenerates from seed at these dims, so a
+        // save is only valid for the size (and day length) it was written at
+        world: { sx: WORLD.SIZE_X, sz: WORLD.SIZE_Z, h: WORLD.HEIGHT },
+        dayLen: TIME.DAY_LENGTH,
         seed: game.seed,
         hardcore: game.recovery.hardcore,
         t: game.t,
@@ -36,6 +46,8 @@ export const SaveStore = {
         lastSleepDay: game.lastSleepDay,
         radioHeard: game.radioHeard,
         docTaken: [...game.docTaken],
+        minesSeen: [...game.minesSeen],
+        craftGrid: game.craftGrid,
         chests: [...game.chests.entries()].map(([k, c]) => {
           const [x, y, z] = k.split(',').map(Number);
           return { x, y, z, items: c.items };
@@ -84,6 +96,22 @@ export const SaveStore = {
       if ((data.version || 1) < 2) {
         data.bossState = { kiln: {}, pump: {} };
         data.version = 2;
+      }
+      // v3: saves carry world dims. A save written at different dims would
+      // replay its edit diffs onto different terrain — archive it untouched
+      // rather than corrupt it (the menu then offers a fresh world).
+      const w = data.world;
+      if (!w || w.sx !== WORLD.SIZE_X || w.sz !== WORLD.SIZE_Z || w.h !== WORLD.HEIGHT) {
+        console.warn('Save from an older world version — archived, starting fresh worlds from now on.');
+        localStorage.setItem(OLD_WORLD_KEY, raw);
+        localStorage.removeItem(KEY);
+        return null;
+      }
+      // day-length rescale keeps day count / time-of-day continuous if the
+      // cycle length is ever retuned again
+      if (data.dayLen && data.dayLen !== TIME.DAY_LENGTH) {
+        data.t = data.t / data.dayLen * TIME.DAY_LENGTH;
+        data.dayLen = TIME.DAY_LENGTH;
       }
       return data;
     } catch { return null; }

@@ -47,6 +47,12 @@ export class Props {
     const group = buildProp(def.model, opts);
     group.position.set(x + 0.5, y, z + 0.5);
     group.userData.sweepSeed = (x * 7 + z * 13) % 10;
+    // props sit in the sun's shadow pass (glow parts are MeshBasic — unlit,
+    // so casting is what matters visually). Slim props (torches, wires,
+    // sensors) skip casting: invisible shadows, real draw calls.
+    if (!def.slim) {
+      group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    }
     this.game.scene.add(group);
     this.map.set(k, { group, kind: def.model, x, y, z, id });
   }

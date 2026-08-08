@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { STRAINS, BLOCKS, B, WORLD, SCORE } from './config.js';
+import { STRAINS, BLOCKS, B, WORLD, SCORE, COMBAT, canInfectedBreakBlock } from './config.js';
 import { buildInfectedMesh } from './models.js';
 
 let _uid = 1;
@@ -22,6 +22,7 @@ export class Infected {
     this.fromAssault = !!opts.fromAssault;
     this.flickerT = 0;
     this.facing = Math.random() * Math.PI * 2;
+    this.kb = new THREE.Vector3();   // transient knockback shove (not serialized)
     this.buildMesh();
   }
 
@@ -32,6 +33,7 @@ export class Infected {
     this.headMesh = head;
     this.bodyMats = mats;
     this.bodyMat = mats[0];
+    group.traverse(o => { if (o.isMesh) o.castShadow = true; });
     this.game.scene.add(group);
   }
 
@@ -107,6 +109,14 @@ export class Infected {
     if (this.target) dir.set(this.target.x - this.pos.x, 0, this.target.z - this.pos.z);
     const horizDist = dir.length();
 
+    // knockback shove FIRST — it must interrupt chewing/spitting, not queue
+    // behind their early returns. Decays fast, respects collision, and never
+    // triggers block attacks (noAttack).
+    if (this.kb.lengthSq() > 0.02) {
+      this.tryMove(this.kb.x * dt, this.kb.z * dt, true);
+      this.kb.multiplyScalar(Math.max(0, 1 - COMBAT.kbDecay * dt));
+    }
+
     // §12.3 #4: retaliate against a defensive system that just hurt it
     if (this.retaliate) {
       this.target = { x: this.retaliate.x + 0.5, y: this.retaliate.y + 0.5, z: this.retaliate.z + 0.5 };
@@ -116,10 +126,14 @@ export class Infected {
       if (this.retaliateT <= 0) this.retaliate = null;
     }
 
-    // attack player if adjacent
+    // attack player if adjacent — a landed hit shoves the player back
     const dToPlayer = this.pos.distanceTo(p.pos);
     if (this.targetIsPlayer && dToPlayer < 1.4) {
-      if (this.attackCd <= 0) { p.damage(this.s.dmg, this.s.name); this.attackCd = 1.0; this.lunge = 0.15; }
+      if (this.attackCd <= 0) {
+        const landed = p.damage(this.s.dmg, this.s.name);
+        if (landed !== false) p.applyKnockback?.(this.pos);
+        this.attackCd = 1.0; this.lunge = 0.15;
+      }
     }
 
     // §12.2 ranged infected: hold distance and spit contaminated fluid
@@ -165,7 +179,9 @@ export class Infected {
       if (d3 < 2.1) {
         const id = this.game.world.get(bx, by, bz);
         const def = BLOCKS[id];
-        if (def && def.solid && def.hardness !== Infinity) {
+        // only machine eaters chew, and only machine blocks (incl. non-solid
+        // cables) — everyone else falls through to the frustration timer
+        if (def && (def.solid || def.wire) && def.hardness !== Infinity && canInfectedBreakBlock(this.s, def)) {
           this.game.infectedAttackBlock(bx, by, bz, this.s.blockDmg * dt, this);
           this.facing = Math.atan2(this.target.x - this.pos.x, this.target.z - this.pos.z);
           this._stuckT = 0;
@@ -182,10 +198,20 @@ export class Infected {
         const under = this.game.world.get(fx, fy, fz);
         const ud = BLOCKS[under];
         if (ud && ud.solid && ud.hardness !== Infinity) {
-          this.game.infectedAttackBlock(fx, fy, fz, this.s.blockDmg * dt, this);
-          this._stuckT = 0;
-          this.syncMesh(dt);
-          return;
+          // burrowers dig down through soil (movement); machine eaters chew a
+          // machine they stand on; every other pairing gives up via frustration
+          if (this.s.burrows && this.isSoft(fx, fy, fz)) {
+            this.game.infectedDigSoft?.(fx, fy, fz, this.s.blockDmg * 4 * dt, this);
+            this._stuckT = 0;
+            this.syncMesh(dt);
+            return;
+          }
+          if (canInfectedBreakBlock(this.s, ud)) {
+            this.game.infectedAttackBlock(fx, fy, fz, this.s.blockDmg * dt, this);
+            this._stuckT = 0;
+            this.syncMesh(dt);
+            return;
+          }
         }
       }
       // Frustration: no progress toward this stimulus → give up on it a while.
@@ -238,7 +264,7 @@ export class Infected {
     return id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL;
   }
 
-  tryMove(dx, dz) {
+  tryMove(dx, dz, noAttack = false) {
     const nx = this.pos.x + dx, nz = this.pos.z + dz;
     const feetY = Math.floor(this.pos.y);
     // blocked?
@@ -250,26 +276,43 @@ export class Infected {
       this.pos.x = nx; this.pos.z = nz; this.pos.y = feetY + 1; return;
     }
     // §12.2 burrower: pushes straight through soil/gravel, leaving readable
-    // disturbance (grass churned to dirt) instead of chewing at full cost
-    if (this.s.burrows) {
+    // disturbance (grass churned to dirt). This is movement, not an attack —
+    // it routes around the machine-eater-only breaking rule via infectedDigSoft.
+    if (this.s.burrows && !noAttack) {
       const bx = Math.floor(nx), bz = Math.floor(nz);
       const ty = blockHead ? feetY + 1 : feetY;
       if (this.isSoft(bx, ty, bz)) {
-        this.game.infectedAttackBlock(bx, ty, bz, this.s.blockDmg * 8 * (this._dt || 0.016), this);
+        this.game.infectedDigSoft?.(bx, ty, bz, this.s.blockDmg * 8 * (this._dt || 0.016), this);
         this.game.leaveDisturbance(bx, bz);
         return;
       }
     }
     // §12.2 climber: blocked by a face → scale it instead of chewing it
-    if (this.s.climbs && blockHead && !this.solidAt(this.pos.x, feetY + 2, this.pos.z)) {
+    // (not while being flung — a shove must not convert into a climb boost)
+    if (this.s.climbs && !noAttack && blockHead && !this.solidAt(this.pos.x, feetY + 2, this.pos.z)) {
       this.pos.y += 3.2 * (this._dt || 0.016);
       this._climbedNow = true;   // defeat gravity for this frame
       this.climbingT = 0.5;      // brief cling so it can crest the edge
       return;
     }
-    // blocked by a barrier — attack the obstructing block (breach / eat machine)
+    // blocked by a barrier — only a machine eater blocked by a machine block
+    // attacks it; everyone else is simply stopped (knockback never attacks)
+    if (noAttack) return;
     const ty = blockHead ? feetY + 1 : feetY;
-    this.game.infectedAttackBlock(Math.floor(nx), ty, Math.floor(nz), this.s.blockDmg * (this._dt || 0.016), this);
+    const bDef = BLOCKS[this.game.world.get(Math.floor(nx), ty, Math.floor(nz))];
+    if (canInfectedBreakBlock(this.s, bDef)) {
+      this.game.infectedAttackBlock(Math.floor(nx), ty, Math.floor(nz), this.s.blockDmg * (this._dt || 0.016), this);
+    }
+  }
+
+  // Melee shove away from `fromPos`. Heavier frames resist; encounter bosses
+  // are immune (a jugglable colony host trivializes the fight).
+  applyKnockback(fromPos, power) {
+    if (this.s.boss || this.isFalse) return;
+    const dx = this.pos.x - fromPos.x, dz = this.pos.z - fromPos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const p = power / (this.s.scale * this.s.scale);
+    this.kb.set(dx / len * p, 0, dz / len * p);
   }
 
   updateFalse(dt) {
@@ -320,8 +363,10 @@ export class Infected {
     this.hp -= dmg;
     this.flash();
     this.game.sig.addBlood(this.pos.x, this.pos.y + 0.5, this.pos.z, 0.4);
-    if (source) {
-      // §12.3 #4: hit by a defensive system — turn on the machine, not the player
+    if (source && this.s.targetsMachines) {
+      // §12.3 #4: hit by a defensive system — turn on the machine, not the
+      // player. Only machine eaters can actually hurt it; anyone else would
+      // camp a turret they cannot damage, so they hunt the player instead.
       this.retaliate = source;
       this.retaliateT = 6;
     } else {

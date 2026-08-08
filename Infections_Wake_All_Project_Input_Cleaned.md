@@ -324,3 +324,21 @@ The following section collects the latest user decisions in one place. It does n
 - Zombie behavior comes from independent biological infection and mutation
 - The exact lore should be included at concept level in the main human-readable specification
 
+
+---
+
+## 22. Wishlist Update (Handwritten Notes, August 2026)
+
+Transcribed from two handwritten pages titled "Infections Wake":
+
+1. Make door and bed blocks (two blocks).
+2. Only machine eaters break blocks, and they can only break machine blocks.
+3. Knockback.
+4. Mines are hills with finite ore blocks inside, so mining is like *Factorio*. (Drawing: a hill with an entrance labeled "ore" inside.)
+5. Days are 15-minute halves.
+6. Texturize graphics.
+7. Inventory upgrade so you click on a square and can select that square for movement of the item, like in *Vintage Story* and *Minecraft*.
+8. Grid-based crafting.
+9. A handbook for all recipes that shows an image of the items in the grid in the pattern for the item — same as *Vintage Story*.
+10. Upgrade graphics a notch.
+11. Make the world bigger.

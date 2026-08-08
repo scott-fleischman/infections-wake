@@ -24,6 +24,12 @@ export function makeStubGame(overrides = {}) {
     infectedAttackBlock(x, y, z, amount, inf) {
       game.attackedBlocks.push({ x, y, z, amount, inf });
     },
+    // burrower soil passage — recorded separately from block attacks
+    dugSoft: [],
+    infectedDigSoft(x, y, z, amount, inf) {
+      game.dugSoft.push({ x, y, z, amount, inf });
+    },
+    leaveDisturbance() {},
 
     scene: { add() {}, remove() {} },
     lights: { set() {}, remove() {} },

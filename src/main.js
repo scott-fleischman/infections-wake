@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WORLD, TIME, B, BLOCKS, ITEMS, SCORE, SANITY, RECOVERY, PLAYER, STRAINS, MACHINES, DEEP, ACCESS_DEFAULTS } from './config.js';
+import { WORLD, TIME, B, BLOCKS, ITEMS, SCORE, SANITY, RECOVERY, PLAYER, STRAINS, MACHINES, DEEP, ACCESS_DEFAULTS, COMBAT, canInfectedBreakBlock } from './config.js';
 import { RNG } from './rng.js';
 import { World } from './world.js';
 import { Player } from './player.js';
@@ -20,6 +20,7 @@ import { GameAudio } from './audio.js';
 import { LightPool } from './light.js';
 import { SaveStore } from './save.js';
 import { SCENARIOS, applyScenario } from './scenarios.js';
+import { Sky } from './sky.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,13 +30,27 @@ class Game {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // graphics notch (wishlist #10): filmic tone mapping + soft sun shadows
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     $('app').appendChild(this.renderer.domElement);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 320);
     this.sun = new THREE.DirectionalLight(0xffe8c0, 1.0);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    const sc = this.sun.shadow.camera;
+    sc.left = -48; sc.right = 48; sc.top = 48; sc.bottom = -48;
+    sc.near = 10; sc.far = 260;
+    sc.updateProjectionMatrix();
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.05;
     this.hemi = new THREE.HemisphereLight(0xbdd3e8, 0x3a3428, 0.9);
-    this.scene.add(this.sun, this.hemi);
+    this.scene.add(this.sun, this.sun.target, this.hemi);
     this.scene.fog = new THREE.Fog(0x9db4c8, 40, 190);
+    this.sky = new Sky(this.scene);
 
     this.audio = new GameAudio();
     // accessibility (§7.5): presentation-only options, persisted per device.
@@ -174,6 +189,8 @@ class Game {
     this.lastSleepDay = 1;
     this.radioHeard = [];      // ordered broadcast keys (latest replays at the set)
     this.docTaken = new Set(); // archive ids whose physical copy was pocketed
+    this.minesSeen = new Set(); // ore-hill indices discovered on foot
+    this.craftGrid = new Array(9).fill(null); // 3x3 grid-crafting cells {id,n}
     this.chests = new Map();   // "x,y,z" -> { items: [{id,n}] }
     this.trapWear = new Map();
     this.projectiles = [];
@@ -275,6 +292,10 @@ class Game {
     this.lastSleepDay = d.lastSleepDay ?? this.day;
     this.radioHeard = d.radioHeard || [];
     this.docTaken = new Set(d.docTaken || []);
+    this.minesSeen = new Set(d.minesSeen || []);
+    if (Array.isArray(d.craftGrid)) {
+      for (let i = 0; i < 9; i++) this.craftGrid[i] = d.craftGrid[i] || null;
+    }
     this.bossState = d.bossState || {};
     this.chests = new Map((d.chests || []).map(c => [`${c.x},${c.y},${c.z}`, { items: c.items || [] }]));
     for (const [k, v] of Object.entries(d.blockHp || {})) this.blockHp.set(k, v); // scars persist (§6.7)
@@ -455,12 +476,22 @@ class Game {
         if (k >= '1' && k <= '6') { this.inv.selected = Number(k) - 1; this.hud.updateHotbar(); }
         if (k === 'q') { this.inv.selected = (this.inv.selected + 1) % this.inv.hotbarCount; this.hud.updateHotbar(); }
         if (k === 'e') { this.openScreen('inv-screen'); return; }
+        if (k === 'h') { this.openScreen('handbook-screen'); return; }
         if (k === 'j') { this.openScreen('log-screen'); return; }
         if (k === 'm') { this.openScreen('map-screen'); return; }
         if (k === 'f') this.interact();
         if (k === 'escape') this.pause();
       } else if (this.hud.isScreenOpen() && this.state === 'play') {
-        if (k === 'escape' || (k === 'e' && this.hud.activeScreen === 'inv-screen') || (k === 'j' && this.hud.activeScreen === 'log-screen') || (k === 'm' && this.hud.activeScreen === 'map-screen')) {
+        if (document.activeElement?.tagName === 'INPUT') {
+          if (k === 'escape') { this.hud.closeAll(); this.requestLock(); }
+          return; // typing in the handbook search — keys are text, not hotkeys
+        }
+        if (k === 'h' && this.hud.activeScreen === 'inv-screen') {
+          // the field kit's button says [H] — the key honors it
+          this.openScreen('handbook-screen');
+          return;
+        }
+        if (k === 'escape' || (k === 'e' && this.hud.activeScreen === 'inv-screen') || (k === 'h' && this.hud.activeScreen === 'handbook-screen') || (k === 'j' && this.hud.activeScreen === 'log-screen') || (k === 'm' && this.hud.activeScreen === 'map-screen')) {
           this.hud.closeAll(); this.requestLock();
         }
       }
@@ -519,6 +550,7 @@ class Game {
   openScreen(id) {
     this.hud.show(id);
     if (id === 'inv-screen') this.hud.renderInventory();
+    if (id === 'handbook-screen') this.hud.renderHandbook();
     if (id === 'log-screen') this.hud.renderLog();
     if (id === 'map-screen') this.valleyMap.render();
   }
@@ -573,6 +605,8 @@ class Game {
       if (!blockHit || blockHit.dist > eDist - 0.4) {
         const dmg = held?.def?.dmg || 1;
         enemy.takeHit(dmg, true);
+        // knockback rides on the melee hit only (turrets/traps tick too often)
+        enemy.applyKnockback?.(this.player.pos, held?.def?.kb || COMBAT.handKb);
         this.audio.hitEnemy();
         this.inv.useToolDurability(1);
         this.attackCd = 0.45;
@@ -999,14 +1033,14 @@ class Game {
   floodVault() {
     const d = this.world.poi.deep;
     // water rises through the vault and the third gallery (§18.3)
-    for (let x = 102; x <= d.x1; x++)
+    for (let x = d.floodX0; x <= d.x1; x++)
       for (let z = d.z0; z <= d.z1; z++)
         for (let y = d.floor; y <= d.floor + 1; y++) {
           if (this.world.get(x, y, z) === B.AIR) this.world.set(x, y, z, B.WATER);
         }
     this.deep.flooded = true;
     this.toast('VALVE THREE — the reservoir floods. Everything that still moves is coming UP.', 'bad');
-    this.spawnDeepWave({ drifter: 4, brute: 1, machine_eater: 1 }, 112, 14);
+    this.spawnDeepWave({ drifter: 4, brute: 1, machine_eater: 1 }, d.vault.x0 + 2, Math.floor((d.z0 + d.z1) / 2));
     this.toast('Burn out the remaining growth. The meter on your HUD is its viability.', 'important');
   }
 
@@ -1179,16 +1213,22 @@ class Game {
       this._sleeping = false;
       $('night-fade').style.opacity = '0';
       if (this.state !== 'play') return; // died/paused/quit during the fade
-      // advance to dawn
+      // advance to the NEXT dawn: before midnight that is the next cycle's,
+      // after midnight it is this cycle's (jumping a whole extra cycle would
+      // silently skip a full 30-minute day)
       const day0 = Math.floor(this.t / TIME.DAY_LENGTH);
-      this.t = (day0 + 1) * TIME.DAY_LENGTH + TIME.DAWN * TIME.DAY_LENGTH + 1;
+      const preDawn = (this.t % TIME.DAY_LENGTH) / TIME.DAY_LENGTH < TIME.DAWN;
+      this.t = (preDawn ? day0 : day0 + 1) * TIME.DAY_LENGTH + TIME.DAWN * TIME.DAY_LENGTH + 1;
+      // settle dayFrac now so the frame loop's dawn-crossing check doesn't
+      // fire a second onDawn/onNewDay for the jump we just made
+      this.dayFrac = this._prevFrac = (this.t % TIME.DAY_LENGTH) / TIME.DAY_LENGTH;
       // §8.1: a full belly makes for better sleep
       const quality = 0.6 + 0.4 * (this.player.hunger / 100);
       this.sanity.addSuppressant(SANITY.sleepGain * quality);
       this.player.hunger = Math.max(5, this.player.hunger - 8);
-      this.lastSleepDay = this.day + 1;
       this.director.onDawn();
       this.onNewDay();
+      this.lastSleepDay = this.day;
       this.toast('You slept. Stability restored. A new day.', 'important');
     }, 900);
   }
@@ -1271,14 +1311,20 @@ class Game {
   infectedAttackBlock(x, y, z, amount, inf) {
     const id = this.world.get(x, y, z);
     const def = BLOCKS[id];
-    if (!def || !def.solid) return;
+    // wires are non-solid but chewable — 'chewed cable' is the machine
+    // eater's signature move (live_wire forecast tag)
+    if (!def || (!def.solid && !def.wire)) return;
     if (def.hardness === Infinity) return;
+    // Wishlist rule (authoritative gate — infected.js mirrors it for AI flow):
+    // only machine eaters damage blocks, and only machine blocks.
+    if (inf && !canInfectedBreakBlock(inf.s, def)) return;
     const key = `${x},${y},${z}`;
     const maxHp = (def.armor || 1) * (def.hardness || 1) * 8;
     const hp = (this.blockHp.get(key) ?? maxHp) - amount;
     if (hp <= 0) {
       this.world.set(x, y, z, B.AIR);
       this.clearBlockCell(x, y, z, id);
+      this.settleFalls(x, y, z);
       if (this.director.assaultActive) this.stats.breachedThisAssault = true;
       // viability accounting holds no matter WHO destroys reservoir growth —
       // displaced infected chew tissue too (§18.4)
@@ -1288,6 +1334,39 @@ class Game {
     } else {
       this.blockHp.set(key, hp);
       if (Math.random() < 0.05) this.audio.dig();
+    }
+  }
+
+  // Burrower soil passage (§12.2): movement through loose ground. Exempt from
+  // the machine-eater rule but restricted to natural soft blocks, so it can
+  // never touch anything a player built.
+  infectedDigSoft(x, y, z, amount, inf) {
+    const id = this.world.get(x, y, z);
+    if (id !== B.DIRT && id !== B.GRASS && id !== B.SAND && id !== B.GRAVEL) return;
+    const def = BLOCKS[id];
+    const key = `${x},${y},${z}`;
+    const maxHp = (def.armor || 1) * (def.hardness || 1) * 8;
+    const hp = (this.blockHp.get(key) ?? maxHp) - amount;
+    if (hp <= 0) {
+      this.world.set(x, y, z, B.AIR);
+      this.clearBlockCell(x, y, z, id);
+      this.settleFalls(x, y, z);
+      if (Math.random() < 0.3) this.audio.dig();
+    } else {
+      this.blockHp.set(key, hp);
+      if (Math.random() < 0.05) this.audio.dig();
+    }
+  }
+
+  // Sand/gravel above a removed cell settles — shared by every removal path
+  // (player mining already had this inline; infected paths need it too).
+  settleFalls(x, y, z) {
+    let fy = y;
+    while (BLOCKS[this.world.get(x, fy + 1, z)]?.falls) {
+      const above = this.world.get(x, fy + 1, z);
+      this.world.set(x, fy + 1, z, B.AIR);
+      this.world.set(x, fy, z, above);
+      fy++;
     }
   }
 
@@ -1365,6 +1444,28 @@ class Game {
     // §14.1 highest defended night contributes, capped
     v += Math.min(10, this.stats?.highestNight || 0) * SCORE.valley.nightScale;
     return Math.min(100, v);
+  }
+
+  // Empty the 3x3 craft grid back into the inventory (overflow drops at the
+  // player's feet). Used by the Return-items button, handbook arranging, and
+  // death — the grid itself is persisted in saves, so autosave never yanks
+  // items out from under an arrangement in progress.
+  returnCraftGrid() {
+    if (!this.craftGrid || !this.inv) return;
+    for (let i = 0; i < 9; i++) {
+      const c = this.craftGrid[i];
+      if (!c) continue;
+      // the UI refuses tools in the grid, but a record carrying durability
+      // (e.g. from an edited save) must survive intact — add() would reset it
+      if (c.dur != null) {
+        const free = this.inv.slots.findIndex(s => !s);
+        if (free >= 0) { this.inv.slots[free] = c; this.craftGrid[i] = null; continue; }
+      }
+      const overflow = this.inv.add(c.id, c.n);
+      if (overflow > 0) this.dropItemAt(this.player.pos, c.id, overflow);
+      this.craftGrid[i] = null;
+    }
+    this.hud.updateHotbar();
   }
 
   onCrafted(r) {
@@ -1459,6 +1560,9 @@ class Game {
   // ---------------- death & recovery ----------------
   onPlayerDeath(cause) {
     if (this.state !== 'play') return;
+    // whatever was mid-arrangement in the craft grid rejoins the kit before
+    // the recovery ladder decides what happens to it
+    this.returnCraftGrid();
     this.state = 'dead';
     this.player.miningHeld = false;
     this.audio.die();
@@ -1635,6 +1739,14 @@ class Game {
     if (near(poi.transit.x, poi.transit.z, 10)) this.survey('transit', 'transit relay station');
     if (near(poi.colony.x, poi.colony.z, 10) && Math.abs(poi.colony.y - p.y) < 6) this.survey('colony', 'colony seam');
     for (const r of poi.reservoirs || []) if (near(r.x, r.z, 8)) this.survey(r.id, 'secondary reservoir');
+    // ore hills go on the map once walked up to (no valley score — they're
+    // resources, not recovery)
+    (poi.mines || []).forEach((m, i) => {
+      if (!this.minesSeen.has(i) && near(m.x, m.z, 13)) {
+        this.minesSeen.add(i);
+        this.toast(`${m.kind === 'iron' ? 'Iron' : 'Coal'} deposit — marked on your map [M].`, 'important');
+      }
+    });
   }
 
   setMineOverlay(hit, progress = 0) {
@@ -1701,9 +1813,17 @@ class Game {
     const dl = this.daylight();
     const f = this.dayFrac;
     const sunAngle = (f - 0.25) * Math.PI * 2;
-    this.sun.position.set(Math.cos(sunAngle) * 80, Math.sin(sunAngle) * 100, 30);
-    this.sun.intensity = Math.max(0.02, dl) * 1.15;
-    this.hemi.intensity = 0.18 + dl * 0.85;
+    // shadow camera follows the player; the angle is quantized so the shadow
+    // map only re-projects in small discrete steps (kills per-frame shimmer)
+    const p = this.player ? this.player.pos : { x: 0, z: 0 };
+    const qa = Math.round(sunAngle / 0.004) * 0.004;
+    const sx = Math.round(p.x / 2) * 2, sz = Math.round(p.z / 2) * 2;
+    this.sun.position.set(sx + Math.cos(qa) * 90, Math.sin(qa) * 110, sz + 34);
+    this.sun.target.position.set(sx, 0, sz);
+    this.sun.castShadow = this.access.shadows !== false && dl > 0.05;
+    // ACES tone mapping darkens mids — lights get a matching push
+    this.sun.intensity = Math.max(0.02, dl) * 1.5;
+    this.hemi.intensity = 0.22 + dl * 1.0;
     const day = new THREE.Color(0x9db4c8);
     const dusk = new THREE.Color(0x8a5a48);
     const night = new THREE.Color(0x0a0f1a);
@@ -1715,6 +1835,12 @@ class Game {
     else sky = day;
     this.scene.fog.color.copy(sky);
     this.renderer.setClearColor(sky);
+    if (this.access.fancySky !== false) {
+      this.sky.update(this.camera, sunAngle, dl, sky);
+    } else {
+      this.sky.setVisible(false);
+      if (this.scene.background) this.scene.background = null;
+    }
     // subtle night fear: fog closes in
     this.scene.fog.near = 30 + dl * 25;
     this.scene.fog.far = 110 + dl * 110;

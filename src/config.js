@@ -7,22 +7,42 @@
 
 export const WORLD = {
   CHUNK: 16,
-  CHUNKS_X: 8,
-  CHUNKS_Z: 8,
+  CHUNKS_X: 12,
+  CHUNKS_Z: 12,
   HEIGHT: 56,
   SEA_LEVEL: 20,
   SURFACE: 24,
 };
 WORLD.SIZE_X = WORLD.CHUNK * WORLD.CHUNKS_X;
 WORLD.SIZE_Z = WORLD.CHUNK * WORLD.CHUNKS_Z;
+// Worldgen densities are tuned per-area at the original 128x128; AREA_SCALE
+// keeps absolute counts (ore veins, nests) proportional when the world grows.
+WORLD.AREA_SCALE = (WORLD.SIZE_X * WORLD.SIZE_Z) / (128 * 128);
 
 // Day length in real seconds (tunable, §27). One full day = DAY_LENGTH seconds.
+// Day runs DAWN→DUSK and night DUSK→DAWN — symmetric fractions make each half
+// exactly DAY_LENGTH/2 (15 real minutes).
 export const TIME = {
-  DAY_LENGTH: 300,      // 5 real minutes per full cycle
-  DAWN: 0.24,           // fraction of day where dawn begins
-  DUSK: 0.72,           // fraction where dusk begins
-  NIGHT: 0.80,          // fraction where full night begins
+  DAY_LENGTH: 1800,     // 30 real minutes per full cycle: 15-minute halves
+  DAWN: 0.25,           // fraction of day where dawn begins
+  DUSK: 0.75,           // fraction where dusk begins
+  NIGHT: 0.82,          // fraction where full night begins
   DAWN_END: 0.30,
+};
+
+// --- Worldgen (§4) --------------------------------------------------------
+// Ore hills (wishlist #4): walk-in mounds whose interiors hold dense, FINITE
+// ore bodies — deposits you can see, walk to, and exhaust, Factorio-style.
+export const WORLDGEN = {
+  oreHills: {
+    count: 4,          // per original 128x128 area — scales with WORLD.AREA_SCALE
+    radiusMin: 5,
+    radiusMax: 8,
+    clearance: 26,     // min distance from structure sites & the spawn shack
+    spacing: 22,       // min distance between hills
+    minOre: 45,        // guaranteed ore blocks per hill
+    outcrops: 5,       // ore cells exposed on the flank so the deposit reads from outside
+  },
 };
 
 // --- Block registry ------------------------------------------------------
@@ -168,11 +188,11 @@ export const ITEMS = {
   stone_pick:   { name: 'Stone pickaxe', color: 0x8a8f96, tool: 'pick', tier: 0, speed: 2.2, dmg: 2, stack: 1, dur: 60 },
   stone_axe:    { name: 'Stone axe', color: 0x8a8f96, tool: 'axe', tier: 0, speed: 2.2, dmg: 3, stack: 1, dur: 60 },
   stone_shovel: { name: 'Stone shovel', color: 0x8a8f96, tool: 'shovel', tier: 0, speed: 2.4, dmg: 1, stack: 1, dur: 60 },
-  stone_spear:  { name: 'Stone spear', color: 0x8a8f96, tool: 'sword', tier: 0, speed: 1, dmg: 5, stack: 1, dur: 50, reach: 4.2 },
+  stone_spear:  { name: 'Stone spear', color: 0x8a8f96, tool: 'sword', tier: 0, speed: 1, dmg: 5, stack: 1, dur: 50, reach: 4.2, kb: 5 },
 
   iron_pick:    { name: 'Iron pickaxe', color: 0xd0d4d8, tool: 'pick', tier: 1, speed: 4.0, dmg: 4, stack: 1, dur: 220 },
   iron_axe:     { name: 'Iron axe', color: 0xd0d4d8, tool: 'axe', tier: 1, speed: 4.0, dmg: 5, stack: 1, dur: 220 },
-  iron_blade:   { name: 'Iron blade', color: 0xe0e4e8, tool: 'sword', tier: 1, speed: 1, dmg: 9, stack: 1, dur: 200, reach: 4.0, spec: 'combat' },
+  iron_blade:   { name: 'Iron blade', color: 0xe0e4e8, tool: 'sword', tier: 1, speed: 1, dmg: 9, stack: 1, dur: 200, reach: 4.0, spec: 'combat', kb: 6 },
   iron_ampoule: { name: 'Biotic ampoule', color: 0x7fae62, stack: 8, desc: 'Continuity charge for a field beacon.' },
   suppressant:  { name: 'Neural suppressant', color: 0x86d4d0, stack: 8, sanity: 30, desc: 'Restores neural stability.' },
   turret_ammo:  { name: 'Turret slugs', color: 0xc9a58a, stack: 99 },
@@ -181,7 +201,7 @@ export const ITEMS = {
   // steel & advanced containment (§11.1)
   steel_ingot:  { name: 'Steel ingot', color: 0x9aa4b0, stack: 99, desc: 'Smelted at the restored industrial kiln.' },
   steel_pick:   { name: 'Steel pickaxe', color: 0x9aa4b0, tool: 'pick', tier: 2, speed: 6.0, dmg: 5, stack: 1, dur: 480 },
-  steel_blade:  { name: 'Steel blade', color: 0xaeb8c4, tool: 'sword', tier: 2, speed: 1, dmg: 14, stack: 1, dur: 420, reach: 4.0, spec: 'combat' },
+  steel_blade:  { name: 'Steel blade', color: 0xaeb8c4, tool: 'sword', tier: 2, speed: 1, dmg: 14, stack: 1, dur: 420, reach: 4.0, spec: 'combat', kb: 7 },
   iron_armor:   { name: 'Iron harness', color: 0xb8bcc0, stack: 1, armor: 0.3, dur: 160, desc: 'Worn while carried. Absorbs a third of each hit.' },
   hide:         { name: 'Animal hide', color: 0x9a8a72, stack: 20 },
   relay_module: { name: 'Control relay', color: 0xe0a83e, stack: 8, desc: 'Transit restoration component. Salvaged from machine scrap and laboratories.' },
@@ -195,63 +215,222 @@ export const TOOL_TIER = ['stone', 'iron', 'steel'];
 // --- Crafting recipes ----------------------------------------------------
 // station: null (hand), 'bench', 'furnace'. cost: {itemOrBlock: n}. out: {id, n}.
 // Block ids are referenced as `b:<id>`; items by their key.
+//
+// `grid` — the hand-authored crafting pattern for grid crafting. 1-3 rows of
+// 1-3 cells; a cell is `null` (empty) or `{ id, n }` using the same id space as
+// `cost`. Contract (enforced by test/recipes.test.js):
+//   * summing `n` per id over every cell must EXACTLY equal `cost`;
+//   * patterns are stored trimmed to their bounding box — the matcher is
+//     translation-invariant, so only the shape matters, not where it sits in
+//     the 3x3. Interior holes (the furnace ring, the cradle core) are shape;
+//   * a cell may carry n > 1: some recipes cost more than 9 items (beacon,
+//     cradle, maint bench, battery) and a few shapes read better with a
+//     doubled tip (the drill bit, the turret barrel);
+//   * recipes sharing a cost map (pick/axe, drill/turret, bricks/slugs) must
+//     have distinct shapes — that difference is the whole point of the grid;
+//   * smelting recipes (`smelt: true`) have NO grid — they take a single input.
 export const RECIPES = [
   // hand
-  { id: 'stone_pick', station: null, cost: { stone_shard: 2, stick: 2 }, out: { stone_pick: 1 } },
-  { id: 'stone_axe', station: null, cost: { stone_shard: 3, stick: 2 }, out: { stone_axe: 1 } },
-  { id: 'stone_shovel', station: null, cost: { stone_shard: 1, stick: 2 }, out: { stone_shovel: 1 } },
-  { id: 'stone_spear', station: null, cost: { stone_shard: 2, stick: 2, fiber: 1 }, out: { stone_spear: 1 } },
-  { id: 'plank', station: null, cost: { 'b:7': 1 }, out: { 'b:12': 4 }, label: 'Wood planks' },
-  { id: 'stick2', station: null, cost: { 'b:12': 1 }, out: { stick: 4 }, label: 'Sticks' },
-  { id: 'bench', station: null, cost: { 'b:12': 4 }, out: { 'b:16': 1 }, label: 'Crafting bench' },
-  { id: 'campfire', station: null, cost: { stick: 5, stone_shard: 3 }, out: { 'b:17': 1 }, label: 'Campfire' },
-  { id: 'torch', station: null, cost: { stick: 1, coal: 1 }, out: { 'b:38': 4 }, label: 'Torch' },
+  { id: 'stone_pick', station: null, cost: { stone_shard: 2, stick: 2 }, out: { stone_pick: 1 },
+    // two heads over a handle
+    grid: [[{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }],
+           [null, { id: 'stick', n: 1 }],
+           [null, { id: 'stick', n: 1 }]] },
+  { id: 'stone_axe', station: null, cost: { stone_shard: 3, stick: 2 }, out: { stone_axe: 1 },
+    // head in an L against the handle
+    grid: [[{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, { id: 'stick', n: 1 }],
+           [null, { id: 'stick', n: 1 }]] },
+  { id: 'stone_shovel', station: null, cost: { stone_shard: 1, stick: 2 }, out: { stone_shovel: 1 },
+    // one blade above two handle sticks
+    grid: [[{ id: 'stone_shard', n: 1 }], [{ id: 'stick', n: 1 }], [{ id: 'stick', n: 1 }]] },
+  { id: 'stone_spear', station: null, cost: { stone_shard: 2, stick: 2, fiber: 1 }, out: { stone_spear: 1 },
+    // leaning shaft, lashing where the point meets the wood
+    grid: [[null, null, { id: 'stone_shard', n: 1 }],
+           [null, { id: 'fiber', n: 1 }, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stick', n: 1 }, { id: 'stick', n: 1 }, null]] },
+  { id: 'plank', station: null, cost: { 'b:7': 1 }, out: { 'b:12': 4 }, label: 'Wood planks',
+    grid: [[{ id: 'b:7', n: 1 }]] },
+  { id: 'stick2', station: null, cost: { 'b:12': 1 }, out: { stick: 4 }, label: 'Sticks',
+    grid: [[{ id: 'b:12', n: 1 }]] },
+  { id: 'bench', station: null, cost: { 'b:12': 4 }, out: { 'b:16': 1 }, label: 'Crafting bench',
+    // the classic 2x2 of planks
+    grid: [[{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }]] },
+  { id: 'campfire', station: null, cost: { stick: 5, stone_shard: 3 }, out: { 'b:17': 1 }, label: 'Campfire',
+    // sticks stacked over a stone hearth, flame gap at the top
+    grid: [[{ id: 'stick', n: 1 }, null, { id: 'stick', n: 1 }],
+           [{ id: 'stick', n: 1 }, { id: 'stick', n: 1 }, { id: 'stick', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }]] },
+  { id: 'torch', station: null, cost: { stick: 1, coal: 1 }, out: { 'b:38': 4 }, label: 'Torch',
+    // coal on a stick
+    grid: [[{ id: 'coal', n: 1 }], [{ id: 'stick', n: 1 }]] },
 
   // bench — structures & tier progression
-  { id: 'wood_wall', station: 'bench', cost: { 'b:12': 2 }, out: { 'b:39': 4 }, label: 'Timber walls' },
-  { id: 'door', station: 'bench', cost: { 'b:12': 6 }, out: { 'b:19': 1 }, label: 'Door' },
-  { id: 'furnace', station: 'bench', cost: { stone_shard: 8 }, out: { 'b:18': 1 }, label: 'Furnace' },
-  { id: 'bed', station: 'bench', cost: { 'b:12': 3, fiber: 4 }, out: { 'b:21': 1 }, label: 'Bed' },
-  { id: 'stone_brick', station: 'bench', cost: { stone_shard: 4 }, out: { 'b:13': 4 }, label: 'Reinforced walls' },
-  { id: 'glass', station: 'bench', cost: { 'b:5': 2 }, out: { 'b:15': 2 }, label: 'Windows (from sand)' },
+  { id: 'wood_wall', station: 'bench', cost: { 'b:12': 2 }, out: { 'b:39': 4 }, label: 'Timber walls',
+    // a standing pair
+    grid: [[{ id: 'b:12', n: 1 }], [{ id: 'b:12', n: 1 }]] },
+  { id: 'door', station: 'bench', cost: { 'b:12': 6 }, out: { 'b:19': 1 }, label: 'Door',
+    // 2 wide x 3 tall — the door shape itself
+    grid: [[{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }]] },
+  { id: 'furnace', station: 'bench', cost: { stone_shard: 8 }, out: { 'b:18': 1 }, label: 'Furnace',
+    // eight stones ringing an empty firebox
+    grid: [[{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, null, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }]] },
+  { id: 'bed', station: 'bench', cost: { 'b:12': 3, fiber: 4 }, out: { 'b:21': 1 }, label: 'Bed',
+    // bedding over a plank frame; the doubled fiber is the pillow
+    grid: [[{ id: 'fiber', n: 2 }, { id: 'fiber', n: 1 }, { id: 'fiber', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }]] },
+  { id: 'stone_brick', station: 'bench', cost: { stone_shard: 4 }, out: { 'b:13': 4 }, label: 'Reinforced walls',
+    // 2x2 of stone
+    grid: [[{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, { id: 'stone_shard', n: 1 }]] },
+  { id: 'glass', station: 'bench', cost: { 'b:5': 2 }, out: { 'b:15': 2 }, label: 'Windows (from sand)',
+    // two sand melted side by side into a pane
+    grid: [[{ id: 'b:5', n: 1 }, { id: 'b:5', n: 1 }]] },
 
   // iron tier (needs iron ingots, at bench)
-  { id: 'iron_pick', station: 'bench', cost: { iron_ingot: 3, stick: 2 }, out: { iron_pick: 1 }, tierUnlock: 'iron' },
-  { id: 'iron_axe', station: 'bench', cost: { iron_ingot: 3, stick: 2 }, out: { iron_axe: 1 }, tierUnlock: 'iron' },
-  { id: 'iron_blade', station: 'bench', cost: { iron_ingot: 4, stick: 1 }, out: { iron_blade: 1 }, tierUnlock: 'iron', spec: 'Combat specialization' },
-  { id: 'iron_block', station: 'bench', cost: { iron_ingot: 4 }, out: { 'b:14': 1 }, label: 'Iron plating', tierUnlock: 'iron', spec: 'Defense specialization' },
-  { id: 'ampoule', station: 'bench', cost: { iron_ingot: 1, fiber: 3 }, out: { iron_ampoule: 1 }, label: 'Biotic ampoule', tierUnlock: 'iron' },
+  { id: 'iron_pick', station: 'bench', cost: { iron_ingot: 3, stick: 2 }, out: { iron_pick: 1 }, tierUnlock: 'iron',
+    // head across the top, handle down the middle
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [null, { id: 'stick', n: 1 }, null],
+           [null, { id: 'stick', n: 1 }, null]] },
+  { id: 'iron_axe', station: 'bench', cost: { iron_ingot: 3, stick: 2 }, out: { iron_axe: 1 }, tierUnlock: 'iron',
+    // same cost as the pick — the L-shaped head is what tells them apart
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'stick', n: 1 }],
+           [null, { id: 'stick', n: 1 }]] },
+  { id: 'iron_blade', station: 'bench', cost: { iron_ingot: 4, stick: 1 }, out: { iron_blade: 1 }, tierUnlock: 'iron', spec: 'Combat specialization',
+    // a diagonal edge with the grip at its base
+    grid: [[null, null, { id: 'iron_ingot', n: 1 }],
+           [null, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'stick', n: 1 }, { id: 'iron_ingot', n: 1 }, null]] },
+  { id: 'iron_block', station: 'bench', cost: { iron_ingot: 4 }, out: { 'b:14': 1 }, label: 'Iron plating', tierUnlock: 'iron', spec: 'Defense specialization',
+    // 2x2 of ingots
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }]] },
+  { id: 'ampoule', station: 'bench', cost: { iron_ingot: 1, fiber: 3 }, out: { iron_ampoule: 1 }, label: 'Biotic ampoule', tierUnlock: 'iron',
+    // metal cap packed round with fiber
+    grid: [[{ id: 'fiber', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'fiber', n: 1 }],
+           [null, { id: 'fiber', n: 1 }, null]] },
 
   // power tier (needs iron + at bench; conceptually steel-lite for the slice)
-  { id: 'generator', station: 'bench', cost: { iron_ingot: 5, 'b:13': 2 }, out: { 'b:22': 1 }, label: 'Fuel generator', tierUnlock: 'iron', spec: 'Mechanical productivity' },
-  { id: 'wire', station: 'bench', cost: { iron_ingot: 1 }, out: { 'b:23': 8 }, label: 'Power cable', tierUnlock: 'iron' },
-  { id: 'lamp', station: 'bench', cost: { iron_ingot: 1, coal: 1 }, out: { 'b:24': 2 }, label: 'Powered lamp', tierUnlock: 'iron' },
-  { id: 'drill', station: 'bench', cost: { iron_ingot: 6, 'b:23': 2 }, out: { 'b:25': 1 }, label: 'Mining drill', tierUnlock: 'iron' },
-  { id: 'turret', station: 'bench', cost: { iron_ingot: 6, 'b:23': 2 }, out: { 'b:26': 1 }, label: 'Warm-body turret', tierUnlock: 'iron', spec: 'Powered defense' },
-  { id: 'turret_ammo', station: 'bench', cost: { stone_shard: 4 }, out: { turret_ammo: 8 }, label: 'Turret slugs', tierUnlock: 'iron' },
-  { id: 'beacon', station: 'bench', cost: { iron_ingot: 8, 'b:23': 4 }, out: { 'b:27': 1 }, label: 'Field recovery beacon', tierUnlock: 'iron' },
+  { id: 'generator', station: 'bench', cost: { iron_ingot: 5, 'b:13': 2 }, out: { 'b:22': 1 }, label: 'Fuel generator', tierUnlock: 'iron', spec: 'Mechanical productivity',
+    // an iron housing standing on two reinforced feet
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, null, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'b:13', n: 1 }, null, { id: 'b:13', n: 1 }]] },
+  { id: 'wire', station: 'bench', cost: { iron_ingot: 1 }, out: { 'b:23': 8 }, label: 'Power cable', tierUnlock: 'iron',
+    grid: [[{ id: 'iron_ingot', n: 1 }]] },
+  { id: 'lamp', station: 'bench', cost: { iron_ingot: 1, coal: 1 }, out: { 'b:24': 2 }, label: 'Powered lamp', tierUnlock: 'iron',
+    // iron hood above the burning element
+    grid: [[{ id: 'iron_ingot', n: 1 }], [{ id: 'coal', n: 1 }]] },
+  { id: 'drill', station: 'bench', cost: { iron_ingot: 6, 'b:23': 2 }, out: { 'b:25': 1 }, label: 'Mining drill', tierUnlock: 'iron',
+    // heavy housing up top, cabling at the sides, the bit hanging DOWN
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'b:23', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'b:23', n: 1 }],
+           [null, { id: 'iron_ingot', n: 2 }, null]] },
+  { id: 'turret', station: 'bench', cost: { iron_ingot: 6, 'b:23': 2 }, out: { 'b:26': 1 }, label: 'Warm-body turret', tierUnlock: 'iron', spec: 'Powered defense',
+    // the drill flipped: base on the ground, barrel pointing UP
+    grid: [[null, { id: 'iron_ingot', n: 2 }, null],
+           [{ id: 'b:23', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'b:23', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }]] },
+  { id: 'turret_ammo', station: 'bench', cost: { stone_shard: 4 }, out: { turret_ammo: 8 }, label: 'Turret slugs', tierUnlock: 'iron',
+    // two slugs standing apart — not the brick's 2x2
+    grid: [[{ id: 'stone_shard', n: 1 }, null, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, null, { id: 'stone_shard', n: 1 }]] },
+  { id: 'beacon', station: 'bench', cost: { iron_ingot: 8, 'b:23': 4 }, out: { 'b:27': 1 }, label: 'Field recovery beacon', tierUnlock: 'iron',
+    // iron ring around a bundled cable core
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'b:23', n: 4 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }]] },
 
   // primitive extras
-  { id: 'trap', station: null, cost: { stick: 3, stone_shard: 4 }, out: { 'b:49': 2 }, label: 'Spike traps' },
-  { id: 'chest', station: 'bench', cost: { 'b:12': 6, fiber: 2 }, out: { 'b:48': 1 }, label: 'Sealed crate', desc: 'Sealed storage hides the scent of what is inside.' },
-  { id: 'iron_armor', station: 'bench', cost: { iron_ingot: 5, hide: 2 }, out: { iron_armor: 1 }, tierUnlock: 'iron', spec: 'Combat specialization' },
-  { id: 'maint_bench', station: 'bench', cost: { iron_ingot: 4, 'b:12': 6 }, out: { 'b:47': 1 }, label: 'Maintenance bench', tierUnlock: 'iron', spec: 'Defense specialization' },
-  { id: 'radio', station: 'bench', cost: { iron_ingot: 2, 'b:23': 1 }, out: { 'b:64': 1 }, label: 'Shortwave radio', tierUnlock: 'iron' },
+  { id: 'trap', station: null, cost: { stick: 3, stone_shard: 4 }, out: { 'b:49': 2 }, label: 'Spike traps',
+    // spikes rising from a stick frame
+    grid: [[{ id: 'stone_shard', n: 1 }, null, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stone_shard', n: 1 }, null, { id: 'stone_shard', n: 1 }],
+           [{ id: 'stick', n: 1 }, { id: 'stick', n: 1 }, { id: 'stick', n: 1 }]] },
+  { id: 'chest', station: 'bench', cost: { 'b:12': 6, fiber: 2 }, out: { 'b:48': 1 }, label: 'Sealed crate', desc: 'Sealed storage hides the scent of what is inside.',
+    // hollow plank box, fiber sealing the lid and the base
+    grid: [[{ id: 'b:12', n: 1 }, { id: 'fiber', n: 1 }, { id: 'b:12', n: 1 }],
+           [{ id: 'b:12', n: 1 }, null, { id: 'b:12', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'fiber', n: 1 }, { id: 'b:12', n: 1 }]] },
+  { id: 'iron_armor', station: 'bench', cost: { iron_ingot: 5, hide: 2 }, out: { iron_armor: 1 }, tierUnlock: 'iron', spec: 'Combat specialization',
+    // shoulders, chest plate, and two hide straps
+    grid: [[{ id: 'iron_ingot', n: 1 }, null, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'hide', n: 1 }, null, { id: 'hide', n: 1 }]] },
+  { id: 'maint_bench', station: 'bench', cost: { iron_ingot: 4, 'b:12': 6 }, out: { 'b:47': 1 }, label: 'Maintenance bench', tierUnlock: 'iron', spec: 'Defense specialization',
+    // iron worktop with a heavy vise, plank body beneath
+    grid: [[{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 2 }, { id: 'iron_ingot', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }],
+           [{ id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }, { id: 'b:12', n: 1 }]] },
+  { id: 'radio', station: 'bench', cost: { iron_ingot: 2, 'b:23': 1 }, out: { 'b:64': 1 }, label: 'Shortwave radio', tierUnlock: 'iron',
+    // a set with an aerial off one corner
+    grid: [[{ id: 'b:23', n: 1 }, null],
+           [{ id: 'iron_ingot', n: 1 }, { id: 'iron_ingot', n: 1 }]] },
 
   // steel tier — steel itself smelts only at the restored industrial kiln (§11.3)
-  { id: 'steel_pick', station: 'bench', cost: { steel_ingot: 3, stick: 2 }, out: { steel_pick: 1 }, tierUnlock: 'steel' },
-  { id: 'steel_blade', station: 'bench', cost: { steel_ingot: 4, stick: 1 }, out: { steel_blade: 1 }, tierUnlock: 'steel', spec: 'Combat specialization' },
-  { id: 'steel_block', station: 'bench', cost: { steel_ingot: 3 }, out: { 'b:40': 2 }, label: 'Steel plating', tierUnlock: 'steel' },
-  { id: 'battery', station: 'bench', cost: { steel_ingot: 4, iron_ingot: 4, 'b:23': 2 }, out: { 'b:41': 1 }, label: 'Battery bank', tierUnlock: 'steel', spec: 'Automation' },
-  { id: 'switch', station: 'bench', cost: { iron_ingot: 1, 'b:23': 1 }, out: { 'b:42': 2 }, label: 'Circuit switch', tierUnlock: 'steel', spec: 'Automation' },
-  { id: 'scrubber', station: 'bench', cost: { steel_ingot: 4, filter_unit: 1 }, out: { 'b:43': 1 }, label: 'Air scrubber', tierUnlock: 'steel', spec: 'Filtration', needsUnlock: 'filtration' },
-  { id: 'uv', station: 'bench', cost: { steel_ingot: 3, 'b:15': 2 }, out: { 'b:44': 1 }, label: 'UV sterilizer', tierUnlock: 'steel', spec: 'Filtration', needsUnlock: 'filtration' },
-  { id: 'vibturret', station: 'bench', cost: { steel_ingot: 5, 'b:23': 2 }, out: { 'b:45': 1 }, label: 'Vibration turret', tierUnlock: 'steel', spec: 'Powered defense' },
-  { id: 'sensor', station: 'bench', cost: { steel_ingot: 2, 'b:23': 1 }, out: { 'b:46': 2 }, label: 'Field sensor', tierUnlock: 'steel', spec: 'Sensing' },
-  { id: 'cradle', station: 'bench', cost: { steel_ingot: 8, continuity_core: 1, 'b:23': 4 }, out: { 'b:28': 1 }, label: 'Lazarus cradle', tierUnlock: 'steel' },
-  { id: 'sterilizer_charge', station: 'bench', cost: { steel_ingot: 1, iron_ampoule: 1, coal: 2 }, out: { sterilizer_charge: 2 }, label: 'Field sterilizers', tierUnlock: 'steel', needsUnlock: 'filtration' },
-  { id: 'relay_module', station: 'bench', cost: { steel_ingot: 2, 'b:23': 2 }, out: { relay_module: 1 }, label: 'Control relay', tierUnlock: 'steel' },
-  { id: 'filter_unit', station: 'bench', cost: { steel_ingot: 1, fiber: 6 }, out: { filter_unit: 1 }, label: 'Filtration cartridge', tierUnlock: 'steel', needsUnlock: 'filtration' },
+  { id: 'steel_pick', station: 'bench', cost: { steel_ingot: 3, stick: 2 }, out: { steel_pick: 1 }, tierUnlock: 'steel',
+    // same silhouette as the iron pick, better metal
+    grid: [[{ id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }],
+           [null, { id: 'stick', n: 1 }, null],
+           [null, { id: 'stick', n: 1 }, null]] },
+  { id: 'steel_blade', station: 'bench', cost: { steel_ingot: 4, stick: 1 }, out: { steel_blade: 1 }, tierUnlock: 'steel', spec: 'Combat specialization',
+    // the iron blade's diagonal, in steel
+    grid: [[null, null, { id: 'steel_ingot', n: 1 }],
+           [null, { id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }],
+           [{ id: 'stick', n: 1 }, { id: 'steel_ingot', n: 1 }, null]] },
+  { id: 'steel_block', station: 'bench', cost: { steel_ingot: 3 }, out: { 'b:40': 2 }, label: 'Steel plating', tierUnlock: 'steel',
+    // three ingots rolled flat into a sheet
+    grid: [[{ id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }]] },
+  { id: 'battery', station: 'bench', cost: { steel_ingot: 4, iron_ingot: 4, 'b:23': 2 }, out: { 'b:41': 1 }, label: 'Battery bank', tierUnlock: 'steel', spec: 'Automation',
+    // terminals on top, steel casing walls, stacked iron cells between
+    grid: [[{ id: 'b:23', n: 1 }, null, { id: 'b:23', n: 1 }],
+           [{ id: 'steel_ingot', n: 1 }, { id: 'iron_ingot', n: 2 }, { id: 'steel_ingot', n: 1 }],
+           [{ id: 'steel_ingot', n: 1 }, { id: 'iron_ingot', n: 2 }, { id: 'steel_ingot', n: 1 }]] },
+  { id: 'switch', station: 'bench', cost: { iron_ingot: 1, 'b:23': 1 }, out: { 'b:42': 2 }, label: 'Circuit switch', tierUnlock: 'steel', spec: 'Automation',
+    // a lever sitting on the line
+    grid: [[{ id: 'iron_ingot', n: 1 }], [{ id: 'b:23', n: 1 }]] },
+  { id: 'scrubber', station: 'bench', cost: { steel_ingot: 4, filter_unit: 1 }, out: { 'b:43': 1 }, label: 'Air scrubber', tierUnlock: 'steel', spec: 'Filtration', needsUnlock: 'filtration',
+    // steel intake with the cartridge slotted into the top
+    grid: [[{ id: 'steel_ingot', n: 1 }, { id: 'filter_unit', n: 1 }, { id: 'steel_ingot', n: 1 }],
+           [{ id: 'steel_ingot', n: 1 }, null, { id: 'steel_ingot', n: 1 }]] },
+  { id: 'uv', station: 'bench', cost: { steel_ingot: 3, 'b:15': 2 }, out: { 'b:44': 1 }, label: 'UV sterilizer', tierUnlock: 'steel', spec: 'Filtration', needsUnlock: 'filtration',
+    // a steel fixture with two glass tubes hanging under it
+    grid: [[{ id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }],
+           [{ id: 'b:15', n: 1 }, null, { id: 'b:15', n: 1 }]] },
+  { id: 'vibturret', station: 'bench', cost: { steel_ingot: 5, 'b:23': 2 }, out: { 'b:45': 1 }, label: 'Vibration turret', tierUnlock: 'steel', spec: 'Powered defense',
+    // turret silhouette in steel: barrel up, wide base
+    grid: [[null, { id: 'steel_ingot', n: 1 }, null],
+           [{ id: 'b:23', n: 1 }, { id: 'steel_ingot', n: 1 }, { id: 'b:23', n: 1 }],
+           [{ id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }]] },
+  { id: 'sensor', station: 'bench', cost: { steel_ingot: 2, 'b:23': 1 }, out: { 'b:46': 2 }, label: 'Field sensor', tierUnlock: 'steel', spec: 'Sensing',
+    // a listening head on a single lead
+    grid: [[{ id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }],
+           [{ id: 'b:23', n: 1 }, null]] },
+  { id: 'cradle', station: 'bench', cost: { steel_ingot: 8, continuity_core: 1, 'b:23': 4 }, out: { 'b:28': 1 }, label: 'Lazarus cradle', tierUnlock: 'steel',
+    // heavy steel corner pillars, cable through every edge, core at the heart
+    grid: [[{ id: 'steel_ingot', n: 2 }, { id: 'b:23', n: 1 }, { id: 'steel_ingot', n: 2 }],
+           [{ id: 'b:23', n: 1 }, { id: 'continuity_core', n: 1 }, { id: 'b:23', n: 1 }],
+           [{ id: 'steel_ingot', n: 2 }, { id: 'b:23', n: 1 }, { id: 'steel_ingot', n: 2 }]] },
+  { id: 'sterilizer_charge', station: 'bench', cost: { steel_ingot: 1, iron_ampoule: 1, coal: 2 }, out: { sterilizer_charge: 2 }, label: 'Field sterilizers', tierUnlock: 'steel', needsUnlock: 'filtration',
+    // ampoule flanked by its charge, steel nozzle below
+    grid: [[{ id: 'coal', n: 1 }, { id: 'iron_ampoule', n: 1 }, { id: 'coal', n: 1 }],
+           [null, { id: 'steel_ingot', n: 1 }, null]] },
+  { id: 'relay_module', station: 'bench', cost: { steel_ingot: 2, 'b:23': 2 }, out: { relay_module: 1 }, label: 'Control relay', tierUnlock: 'steel',
+    // steel body over a pair of leads
+    grid: [[{ id: 'steel_ingot', n: 1 }, { id: 'steel_ingot', n: 1 }],
+           [{ id: 'b:23', n: 1 }, { id: 'b:23', n: 1 }]] },
+  { id: 'filter_unit', station: 'bench', cost: { steel_ingot: 1, fiber: 6 }, out: { filter_unit: 1 }, label: 'Filtration cartridge', tierUnlock: 'steel', needsUnlock: 'filtration',
+    // steel cap over a block of packed fiber
+    grid: [[null, { id: 'steel_ingot', n: 1 }, null],
+           [{ id: 'fiber', n: 1 }, { id: 'fiber', n: 1 }, { id: 'fiber', n: 1 }],
+           [{ id: 'fiber', n: 1 }, { id: 'fiber', n: 1 }, { id: 'fiber', n: 1 }]] },
 
   // furnace smelting
   { id: 'smelt_iron', station: 'furnace', cost: { iron_ore_raw: 1 }, out: { iron_ingot: 1 }, smelt: true },
@@ -259,6 +438,27 @@ export const RECIPES = [
   // kiln smelting (restored industrial infrastructure, §10.3/§11.3)
   { id: 'smelt_steel', station: 'kiln', cost: { iron_ingot: 1, coal: 2 }, out: { steel_ingot: 1 }, smelt: true },
 ];
+
+// --- Combat feel (§12) ----------------------------------------------------
+// Knockback: melee hits shove the target. Weapon `kb` overrides handKb;
+// infected shove the player on a landed hit. Bosses are immune.
+export const COMBAT = {
+  handKb: 2.5,       // bare-hand / non-weapon knockback power
+  kbDecay: 6,        // per-second exponential decay of an infected's shove
+  playerKb: 6.5,     // horizontal impulse on the player when an infected connects
+  playerKbUp: 3.0,   // small upward pop (grounded hits only)
+  playerKbAccelMul: 0.3, // input authority while being shoved (kbT window)
+  playerKbT: 0.25,
+};
+
+// Which infected may damage which blocks (wishlist rule): ONLY machine-eater
+// strains break blocks, and ONLY machine blocks (powered machinery + cables).
+// Everything else — walls, doors, terrain — is safe from infected. Burrowers
+// still push through loose soil, but that routes through infectedDigSoft as
+// movement, not block damage.
+export function canInfectedBreakBlock(strain, blockDef) {
+  return !!(strain?.targetsMachines && blockDef && (blockDef.machine || blockDef.wire));
+}
 
 // --- Machine behavior ----------------------------------------------------
 export const MACHINES = {
@@ -444,12 +644,15 @@ export const THREAT = {
 };
 
 // --- Sanity (§7) ---------------------------------------------------------
+// Per-minute rates retuned for 30-minute days (a 15-minute night at the old
+// 4.5/min would strip 67 sanity — the same per-night pressure now spreads
+// across the longer half).
 export const SANITY = {
   MAX: 100,
-  dayGain: 3.2,          // per minute in daylight, sheltered
-  nightLoss: 4.5,        // per minute exposed at night
-  darkLoss: 2.0,         // in darkness
-  sporeLoss: 6.0,        // near cysts/nests/reservoir
+  dayGain: 1.2,          // per minute in daylight, sheltered
+  nightLoss: 1.6,        // per minute exposed at night
+  darkLoss: 0.8,         // in darkness
+  sporeLoss: 6.0,        // near cysts/nests/reservoir (location hazard — unchanged)
   sleepGain: 40,
   lampAura: 0.5,         // multiplier reducing night loss under powered light
   thresholds: { stable: 51, unstable: 26, hallucinating: 1 },
@@ -506,6 +709,8 @@ export const ACCESS_DEFAULTS = {
   reduceDistortion: false,   // caps the sanity overlay intensity
   noFlashing: false,         // disables jitter/flash effects
   hallucinationAudio: true,  // separate toggle for phantom audio
+  shadows: true,             // sun shadow maps (off = faster on old machines)
+  fancySky: true,            // gradient sky, sun/moon discs, stars
 };
 
 export const PLAYER = {
@@ -513,6 +718,6 @@ export const PLAYER = {
   reach: 5.0,
   height: 1.7, radius: 0.35, eye: 1.55,
   walk: 4.4, sprint: 7.0, jump: 8.4, gravity: 26,
-  hungerPerSec: 0.10, starveDmg: 1.2,
+  hungerPerSec: 0.055, starveDmg: 1.2, // ~1 full bar per 30-minute day
   regenAtHunger: 40, regenRate: 1.5,
 };

@@ -79,6 +79,26 @@ export class Inventory {
 
   has(cost) { return Object.entries(cost).every(([id, n]) => this.count(id) >= n); }
 
+  // Click-move (wishlist #7): move a whole slot record between two slots —
+  // merge same-id stacks (up to stackMax, remainder stays), otherwise swap.
+  // Records move intact so tool durability (`dur`) is never touched.
+  moveSlot(from, to) {
+    if (from === to || from < 0 || to < 0 || from >= this.size || to >= this.size) return;
+    const a = this.slots[from], b = this.slots[to];
+    if (!a) return;
+    if (!b) { this.slots[to] = a; this.slots[from] = null; return; }
+    if (b.id === a.id && a.dur == null && b.dur == null) {
+      const put = Math.min(a.n, this.stackMax(a.id) - b.n);
+      if (put > 0) {
+        b.n += put; a.n -= put;
+        if (a.n <= 0) this.slots[from] = null;
+        return;
+      }
+    }
+    this.slots[from] = b;
+    this.slots[to] = a;
+  }
+
   // Consume durability from selected tool; returns true if it broke.
   useToolDurability(amount = 1) {
     const s = this.slots[this.selected];

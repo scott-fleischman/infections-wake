@@ -85,17 +85,44 @@
   <!-- Inventory / crafting -->
   <div id="inv-screen" class="screen hidden">
     <div class="screen-inner wide">
-      <h2>FIELD KIT <span class="dim">— [E] close</span></h2>
+      <h2>FIELD KIT <span class="dim">— [E] close · click an item, then click where it goes</span></h2>
       <div id="inv-columns">
         <div>
           <h3>Inventory</h3>
           <div id="inv-grid"></div>
         </div>
         <div>
-          <h3>Fabrication</h3>
+          <h3>Craft <span class="dim" id="craft-station-note"></span></h3>
+          <div id="craft-area">
+            <div id="craft-grid"></div>
+            <div id="craft-arrow">→</div>
+            <div id="craft-out-wrap"><div id="craft-out"></div><div id="craft-out-name" class="dim"></div></div>
+          </div>
+          <div class="btn-row craft-actions">
+            <button id="btn-clear-grid" class="btn">Return items</button>
+            <button id="btn-handbook" class="btn">Handbook [H]</button>
+          </div>
+          <h3>Quick craft</h3>
           <div id="craft-list"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Recipe handbook (wishlist #9): every recipe as its grid pattern -->
+  <div id="handbook-screen" class="screen hidden">
+    <div class="screen-inner wide">
+      <h2>HANDBOOK <span class="dim">— [H] close · every recipe, drawn as its crafting pattern</span></h2>
+      <div id="hb-controls">
+        <input id="hb-search" type="text" placeholder="Search recipes…" autocomplete="off" />
+        <div id="hb-tabs">
+          <button data-st="all" class="tab active">All</button>
+          <button data-st="hand" class="tab">Hand</button>
+          <button data-st="bench" class="tab">Bench</button>
+          <button data-st="smelt" class="tab">Smelting</button>
+        </div>
+      </div>
+      <div id="hb-list"></div>
     </div>
   </div>
 
@@ -163,6 +190,8 @@
         <label><input type="checkbox" id="acc-distortion" /> Reduce visual distortion</label>
         <label><input type="checkbox" id="acc-flashing" /> Disable jitter &amp; flashing</label>
         <label><input type="checkbox" id="acc-audio" checked /> Hallucination audio</label>
+        <label><input type="checkbox" id="acc-shadows" checked /> Sun shadows</label>
+        <label><input type="checkbox" id="acc-sky" checked /> Fancy sky (sun, moon, stars)</label>
       </div>
       <div id="controls-help"></div>
     </div>

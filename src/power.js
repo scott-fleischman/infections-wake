@@ -448,14 +448,22 @@ export class Machines {
     }
   }
   isOre(t) { const id = this.game.world.get(t.x, t.y, t.z); return id === B.IRON_ORE || id === B.COAL_ORE; }
+  // Nearest ore in a small working radius (Factorio-style): a drill parked on
+  // a dense hill deposit eats through the local body, nearest block first,
+  // then idles when the deposit is spent.
   findOre(m) {
-    const cand = [[0,-1,0],[1,0,0],[-1,0,0],[0,0,1],[0,0,-1],[0,-1,1],[0,-1,-1]];
-    for (const [dx, dy, dz] of cand) {
-      const x = m.x+dx, y = m.y+dy, z = m.z+dz;
-      const id = this.game.world.get(x, y, z);
-      if (id === B.IRON_ORE || id === B.COAL_ORE) return { x, y, z, id };
-    }
-    return null;
+    let best = null, bestD = Infinity;
+    for (let dy = -2; dy <= 1; dy++)
+      for (let dx = -2; dx <= 2; dx++)
+        for (let dz = -2; dz <= 2; dz++) {
+          if (!dx && !dy && !dz) continue;
+          const x = m.x + dx, y = m.y + dy, z = m.z + dz;
+          const id = this.game.world.get(x, y, z);
+          if (id !== B.IRON_ORE && id !== B.COAL_ORE) continue;
+          const d = dx * dx + dy * dy * 0.5 + dz * dz; // slight preference downward
+          if (d < bestD) { bestD = d; best = { x, y, z, id }; }
+        }
+    return best;
   }
 
   updateTurret(m, dt, running) {

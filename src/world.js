@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { WORLD, B, BLOCKS } from './config.js';
+import { WORLD, B, BLOCKS, WORLDGEN } from './config.js';
 import { RNG, fbm2, noise3, noise2 } from './rng.js';
+import { getBlockAtlas } from './textures.js';
 
 const { CHUNK, CHUNKS_X, CHUNKS_Z, HEIGHT, SIZE_X, SIZE_Z, SURFACE, SEA_LEVEL } = WORLD;
 
@@ -70,6 +71,13 @@ export class World {
     this.group = new THREE.Group();
     this.material = new THREE.MeshLambertMaterial({ vertexColors: true });
     this.transMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.82, depthWrite: false, side: THREE.DoubleSide });
+    // procedural texture atlas (wishlist #6) — null under headless tests;
+    // the map multiplies the baked vertex colors, so lighting is untouched
+    this.atlas = getBlockAtlas();
+    if (this.atlas) {
+      this.material.map = this.atlas.texture;
+      this.transMaterial.map = this.atlas.texture;
+    }
     // Points of interest discovered during generation.
     this.poi = {};
   }
@@ -158,6 +166,7 @@ export class World {
 
     this.carveCaves();
     this.placeOres();
+    this.placeOreHills();
     this.placeTrees();
     this.scatterSurface();
     this.buildLab();
@@ -208,8 +217,8 @@ export class World {
 
   placeOres() {
     const rng = this.rng.fork('ore');
-    // iron veins deeper, coal shallower
-    const veins = 90;
+    // iron veins deeper, coal shallower; density holds constant per area
+    const veins = Math.round(90 * WORLD.AREA_SCALE);
     for (let i = 0; i < veins; i++) {
       const isIron = i % 2 === 0;
       const cx = rng.int(2, SIZE_X - 3);
@@ -224,6 +233,102 @@ export class World {
     }
   }
 
+  // Ore hills (wishlist #4): visible mounds you can walk into, their interior
+  // chambers lined with dense FINITE ore. Mining one out empties it forever —
+  // the Factorio loop of find deposit → extract → deposit runs dry.
+  placeOreHills() {
+    const rng = this.rng.fork('orehill');
+    this.poi.mines = [];
+    const cfg = WORLDGEN.oreHills;
+    const want = Math.round(cfg.count * WORLD.AREA_SCALE);
+    // structure sites are placed later at these fixed fractions (buildLab,
+    // placeStartRefuge, ...) — hills must leave them room
+    const avoid = [
+      [0.78, 0.5], [0.28, 0.7], [0.28, 0.28], [0.6, 0.75],
+      [0.68, 0.32], [0.42, 0.6], [0.62, 0.18], [0.15, 0.85], [0.88, 0.78],
+    ].map(([fx, fz]) => ({ x: Math.floor(SIZE_X * fx), z: Math.floor(SIZE_Z * fz) }));
+    for (let attempt = 0; attempt < want * 40 && this.poi.mines.length < want; attempt++) {
+      const r = rng.int(cfg.radiusMin, cfg.radiusMax);
+      const cx = rng.int(r + 4, SIZE_X - r - 5);
+      const cz = rng.int(r + 4, SIZE_Z - r - 5);
+      if (avoid.some(a => Math.hypot(a.x - cx, a.z - cz) < cfg.clearance)) continue;
+      if (this.poi.mines.some(m => Math.hypot(m.x - cx, m.z - cz) < cfg.spacing)) continue;
+      const surf = this.surfaceY(cx, cz);
+      if (surf <= SEA_LEVEL || surf > WORLD.HEIGHT - 12) continue; // dry, buildable ground
+      const isIron = this.poi.mines.length % 2 === 0;
+      const placed = this.buildOreHill(rng, cx, cz, surf, r, isIron);
+      this.poi.mines.push({ x: cx, y: surf, z: cz, kind: isIron ? 'iron' : 'coal', ore: placed });
+    }
+  }
+
+  buildOreHill(rng, cx, cz, surf, r, isIron) {
+    const cfg = WORLDGEN.oreHills;
+    const ore = isIron ? B.IRON_ORE : B.COAL_ORE;
+    const hillH = rng.int(4, 6);
+    const cr = Math.max(2, r - 3); // interior chamber radius
+    // stone dome over the site (paraboloid cap, grass-dressed skirt); the dome
+    // is clamped to at least one solid layer above the chamber it will roof
+    for (let dx = -r; dx <= r; dx++)
+      for (let dz = -r; dz <= r; dz++) {
+        const d = Math.hypot(dx, dz);
+        if (d > r) continue;
+        const h = Math.max(d <= cr + 1 ? 3 : 0, Math.round(hillH * (1 - (d / r) ** 2)));
+        const x = cx + dx, z = cz + dz;
+        const base = this.surfaceY(x, z);
+        for (let y = base + 1; y <= surf + h; y++) this._set(x, y, z, B.STONE);
+        if (h <= 1 && this.get(x, Math.max(base, surf + h), z) === B.STONE)
+          this._set(x, Math.max(base, surf + h), z, B.GRASS);
+      }
+    // interior chamber at ground level
+    for (let dx = -cr; dx <= cr; dx++)
+      for (let dz = -cr; dz <= cr; dz++) {
+        if (Math.hypot(dx, dz) > cr) continue;
+        for (let y = surf + 1; y <= surf + 2; y++) this._set(cx + dx, y, cz + dz, B.AIR);
+      }
+    // entrance first: a 2-tall, 2-wide mouth from the south face into the
+    // chamber (carved before ore so the ore count stays exact), with a solid
+    // walkable floor patched under it on sloped ground
+    for (let dz = cr; dz <= r + 1; dz++)
+      for (const ex of [cx, cx + 1]) {
+        for (let y = surf + 1; y <= surf + 2; y++) this._set(ex, y, cz + dz, B.AIR);
+        if (!BLOCKS[this.get(ex, surf, cz + dz)]?.solid) this._set(ex, surf, cz + dz, B.DIRT);
+      }
+    // ore body: chamber walls/floor + a buried core beneath
+    let placed = 0;
+    const tryOre = (x, y, z) => {
+      const id = this.get(x, y, z);
+      if (id === B.STONE || id === B.DIRT) { this._set(x, y, z, ore); placed++; }
+    };
+    for (let dx = -cr - 1; dx <= cr + 1; dx++)
+      for (let dz = -cr - 1; dz <= cr + 1; dz++) {
+        const d = Math.hypot(dx, dz);
+        if (d > cr + 1) continue;
+        const x = cx + dx, z = cz + dz;
+        if (d > cr - 1) { // chamber wall ring
+          for (let y = surf + 1; y <= surf + 2; y++) if (rng.chance(0.7)) tryOre(x, y, z);
+        }
+        if (rng.chance(0.6)) tryOre(x, surf, z);           // chamber floor
+        for (let y = surf - 2; y < surf; y++) if (rng.chance(0.45)) tryOre(x, y, z); // buried core
+      }
+    // top up to the guaranteed minimum from the core region
+    for (let attempt = 0; attempt < 200 && placed < cfg.minOre; attempt++) {
+      tryOre(cx + rng.int(-cr, cr), surf - 2 + rng.int(0, 4), cz + rng.int(-cr, cr));
+    }
+    // visible outcrops on the dome flank — the deposit reads from outside
+    for (let i = 0; i < cfg.outcrops; i++) {
+      const ang = rng.range(0, Math.PI * 2);
+      const dd = rng.range(r * 0.45, r * 0.85);
+      const x = cx + Math.round(Math.cos(ang) * dd), z = cz + Math.round(Math.sin(ang) * dd);
+      for (let y = surf + hillH; y >= surf; y--) {
+        if (this.get(x, y, z) === B.STONE || this.get(x, y, z) === B.GRASS) {
+          this._set(x, y, z, ore); placed++;
+          break;
+        }
+      }
+    }
+    return placed;
+  }
+
   placeTrees() {
     const rng = this.rng.fork('tree');
     for (let x = 3; x < SIZE_X - 3; x++) {
@@ -231,6 +336,8 @@ export class World {
         const plainsMix = Math.min(1, Math.max(0, (x - SIZE_X * 0.55) / (SIZE_X * 0.4)));
         const density = 0.035 * (1 - plainsMix * 0.85);
         if (!rng.chance(density)) continue;
+        // keep ore-hill mouths and flanks readable — no trunks on the skirt
+        if (this.poi.mines?.some(m => Math.hypot(m.x - x, m.z - z) < WORLDGEN.oreHills.radiusMax + 3)) continue;
         const surf = this.surfaceY(x, z);
         if (this.get(x, surf, z) !== B.GRASS) continue;
         const th = rng.int(4, 6);
@@ -387,7 +494,10 @@ export class World {
   placeNests() {
     const rng = this.rng.fork('nest');
     this.poi.nests = [];
-    for (let attempt = 0; attempt < 60 && this.poi.nests.length < 5; attempt++) {
+    // nest count scales with the world's linear size (per-area would flood
+    // the director's incursion sources on big maps)
+    const want = Math.round(5 * Math.sqrt(WORLD.AREA_SCALE));
+    for (let attempt = 0; attempt < 60 * WORLD.AREA_SCALE && this.poi.nests.length < want; attempt++) {
       const x = rng.int(8, SIZE_X - 9), z = rng.int(8, SIZE_Z - 9);
       const surf = this.surfaceY(x, z);
       // find a cave pocket: air with solid floor, well below the surface
@@ -600,6 +710,7 @@ export class World {
     }
     this.poi.deep = {
       floor, top, x0: 78, x1: 124, z0: zc0 - 2, z1: zc1 + 2,
+      floodX0: rooms[3].x0, // valve-three flood starts at gallery three
       entry: { x: 81, y: floor, z: 14 }, valves, clusters,
       gate: { x: 80, y: floor, z: 10 },
       roane: { x: 118, y: floor, z: 14 },
@@ -690,8 +801,8 @@ export class World {
   }
 
   buildChunkGeometry(cx, cz) {
-    const op = { pos: [], col: [], nrm: [], idx: [] };
-    const tr = { pos: [], col: [], nrm: [], idx: [] };
+    const op = { pos: [], col: [], nrm: [], idx: [], uv: [] };
+    const tr = { pos: [], col: [], nrm: [], idx: [], uv: [] };
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     for (let x = x0; x < x0 + CHUNK; x++) {
       for (let z = z0; z < z0 + CHUNK; z++) {
@@ -718,6 +829,13 @@ export class World {
     const baseCol = new THREE.Color(this.vColorFor(id, face, x, y, z));
     const start = t.pos.length / 3;
     const aoVals = [];
+    // atlas rect for this face; sides map v to world-Y (grass fringe on top),
+    // horizontal faces map u,v to X,Z
+    let rect = null;
+    if (this.atlas) {
+      const fname = face.dir[1] === 1 ? 'top' : face.dir[1] === -1 ? 'bottom' : 'side';
+      rect = this.atlas.tileUV(id, fname);
+    }
     for (let i = 0; i < 4; i++) {
       const c = face.corners[i];
       t.pos.push(x + c[0], y + c[1], z + c[2]);
@@ -727,6 +845,11 @@ export class World {
       const emit = def.light ? Math.min(1, def.light / 14) * 0.9 : 0;
       const lum = Math.max(emit, face.shade * ao * sky);
       t.col.push(baseCol.r * lum, baseCol.g * lum, baseCol.b * lum);
+      if (rect) {
+        const u = face.dir[1] === 0 ? (face.dir[0] !== 0 ? c[2] : c[0]) : c[0];
+        const v = face.dir[1] === 0 ? c[1] : c[2];
+        t.uv.push(rect[0] + u * (rect[2] - rect[0]), rect[1] + v * (rect[3] - rect[1]));
+      }
       aoVals.push(ao);
     }
     // flip quad to reduce AO gradient artifacts
@@ -744,6 +867,7 @@ export class World {
     const col = new THREE.Color(Array.isArray(def.col) ? def.col[1] : def.col);
     const sky = 0.4 + 0.6 * this.skyLightAt(x, y + 1, z);
     const lum = def.light ? 1.0 : 0.85 * sky;
+    const rect = this.atlas ? this.atlas.tileUV(id, 'side') : null;
     for (const face of FACES) {
       const start = t.pos.length / 3;
       for (const c of face.corners) {
@@ -753,6 +877,12 @@ export class World {
         t.pos.push(px, py, pz);
         t.nrm.push(face.nrm[0], face.nrm[1], face.nrm[2]);
         t.col.push(col.r * lum, col.g * lum, col.b * lum);
+        if (rect) {
+          // same per-face rule as emitFace, so no face collapses to a 1-D smear
+          const u = face.dir[1] === 0 ? (face.dir[0] !== 0 ? c[2] : c[0]) : c[0];
+          const v = face.dir[1] === 0 ? c[1] : c[2];
+          t.uv.push(rect[0] + u * (rect[2] - rect[0]), rect[1] + v * (rect[3] - rect[1]));
+        }
       }
       t.idx.push(start, start + 1, start + 2, start, start + 2, start + 3);
     }
@@ -764,9 +894,13 @@ export class World {
     g.setAttribute('position', new THREE.Float32BufferAttribute(geoData.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(geoData.col, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(geoData.nrm, 3));
+    if (geoData.uv && geoData.uv.length) g.setAttribute('uv', new THREE.Float32BufferAttribute(geoData.uv, 2));
     g.setIndex(geoData.idx);
     const m = new THREE.Mesh(g, mat);
     m.frustumCulled = true;
+    // only opaque terrain casts/receives the sun shadow (transparent water
+    // and cyst film shadowing itself reads as dirt on the lens)
+    if (mat === this.material) { m.castShadow = true; m.receiveShadow = true; }
     return m;
   }
 

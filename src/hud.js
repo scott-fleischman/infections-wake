@@ -1,6 +1,7 @@
 import { itemDef } from './inventory.js';
 import { BESTIARY } from './lore.js';
 import { STRAINS, RECIPES, SANITY, TIME } from './config.js';
+import { matchGrid, consumeGrid } from './crafting.js';
 import { el, row, gauge, line, clear } from './dom.js';
 import { makeIcon } from './icons.js';
 
@@ -12,13 +13,37 @@ const $ = (id) => document.getElementById(id);
 export class HUD {
   constructor(game) {
     this.game = game;
-    this.screens = ['inv-screen', 'log-screen', 'map-screen', 'catalog-card', 'machine-screen', 'chest-screen', 'pause-screen', 'death-screen', 'fail-screen', 'menu-screen'];
+    this.screens = ['inv-screen', 'handbook-screen', 'log-screen', 'map-screen', 'catalog-card', 'machine-screen', 'chest-screen', 'pause-screen', 'death-screen', 'fail-screen', 'menu-screen'];
     this.activeScreen = 'menu-screen';
     this.machineOpen = null;
     this.chestOpen = null;
+    this.picked = null;   // click-move source: {cont: 'inv'|'craft', idx}
+    this._hbTab = 'all';
     this.buildHelp();
     this.bindTabs();
     this.bindAccess();
+    this.bindCrafting();
+  }
+
+  bindCrafting() {
+    $('btn-clear-grid').addEventListener('click', () => {
+      this.game.returnCraftGrid();
+      this.picked = null;
+      this.refreshInvUI();
+    });
+    $('btn-handbook').addEventListener('click', () => {
+      this.show('handbook-screen');
+      this.renderHandbook();
+    });
+    $('hb-search').addEventListener('input', () => this.renderHandbook());
+    document.querySelectorAll('#hb-tabs .tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#hb-tabs .tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this._hbTab = btn.dataset.st;
+        this.renderHandbook();
+      });
+    });
   }
 
   buildHelp() {
@@ -26,7 +51,7 @@ export class HUD {
       clear(node);
       line(node, [['WASD', true], [' move · ', false], ['Mouse', true], [' look · ', false], ['Space', true], [' jump · ', false], ['Shift', true], [' sprint', false]]);
       line(node, [['LMB (hold)', true], [' break block / attack · ', false], ['RMB', true], [' place block', false]]);
-      line(node, [['1–6', true], [' hotbar · ', false], ['E', true], [' field kit & crafting', false]]);
+      line(node, [['1–6', true], [' hotbar · ', false], ['E', true], [' field kit & crafting · ', false], ['H', true], [' recipe handbook', false]]);
       line(node, [['F', true], [' interact (doors, machines, archives, beds)', false]]);
       line(node, [['J', true], [' story log · ', false], ['M', true], [' valley map · ', false], ['Esc', true], [' pause', false]]);
       node.appendChild(el('div', null, ' '));
@@ -51,6 +76,7 @@ export class HUD {
   // ---------- screens ----------
   show(id) {
     for (const s of this.screens) $(s).classList.toggle('hidden', s !== id);
+    if (id !== this.activeScreen) this.picked = null; // no stale click-move across screens
     this.activeScreen = id;
     if (id) document.exitPointerLock?.();
   }
@@ -59,6 +85,9 @@ export class HUD {
     this.activeScreen = null;
     this.machineOpen = null;
     this.chestOpen = null;
+    this.picked = null;
+    // a hidden-but-focused search input must not keep swallowing keys
+    if (document.activeElement?.tagName === 'INPUT') document.activeElement.blur();
   }
   isScreenOpen() { return this.activeScreen != null; }
 
@@ -293,6 +322,61 @@ export class HUD {
     }
   }
 
+  // ---------- click-move (wishlist #7) ----------
+  // Two containers share one picked-source: the 30-slot inventory and the
+  // 3x3 craft grid. First click picks a stack up (highlight), second click
+  // places it — merge on same id, swap otherwise. Vintage Story style.
+  slotAt(p) { return p.cont === 'inv' ? this.game.inv.slots[p.idx] : this.game.craftGrid[p.idx]; }
+  setSlotAt(p, v) {
+    if (p.cont === 'inv') this.game.inv.slots[p.idx] = v;
+    else this.game.craftGrid[p.idx] = v;
+  }
+
+  handleSlotClick(cont, idx) {
+    const g = this.game;
+    const here = { cont, idx };
+    if (!this.picked) {
+      if (this.slotAt(here)) this.picked = here;
+      this.refreshInvUI();
+      return;
+    }
+    const src = this.picked;
+    this.picked = null;
+    if (src.cont === cont && src.idx === idx) { this.refreshInvUI(); return; } // cancel
+    const a = this.slotAt(src);
+    if (!a) { this.refreshInvUI(); return; }
+    // tools carry durability, which the craft grid (and its overflow paths)
+    // would strip — recipes never call for them anyway. Both directions: a
+    // picked tool placed into the grid, AND a swap that would rotate a tool
+    // from an inventory slot back into the vacated grid cell.
+    const carriesDur = (s) => s && (s.dur != null || (itemDef(s.id)?.tool && itemDef(s.id)?.dur != null));
+    const b0 = this.slotAt(here);
+    if ((cont === 'craft' && carriesDur(a)) || (src.cont === 'craft' && carriesDur(b0))) {
+      g.toast("Tools don't go in the crafting grid.");
+      this.refreshInvUI();
+      return;
+    }
+    if (src.cont === 'inv' && cont === 'inv') {
+      g.inv.moveSlot(src.idx, idx);
+    } else {
+      const b = this.slotAt(here);
+      if (!b) { this.setSlotAt(here, a); this.setSlotAt(src, null); }
+      else if (b.id === a.id && a.dur == null && b.dur == null) {
+        const put = Math.min(a.n, g.inv.stackMax(a.id) - b.n);
+        if (put > 0) {
+          b.n += put; a.n -= put;
+          if (a.n <= 0) this.setSlotAt(src, null);
+        } else { this.setSlotAt(src, b); this.setSlotAt(here, a); }
+      } else { this.setSlotAt(src, b); this.setSlotAt(here, a); }
+    }
+    this.refreshInvUI();
+  }
+
+  refreshInvUI() {
+    if (this.activeScreen === 'inv-screen') this.renderInventory();
+    this.updateHotbar();
+  }
+
   renderInventory() {
     const g = this.game;
     const inv = g.inv;
@@ -300,16 +384,166 @@ export class HUD {
     clear(grid);
     for (let i = 0; i < inv.size; i++) {
       const slot = this.slotEl(inv.slots[i], i === inv.selected);
+      if (this.picked?.cont === 'inv' && this.picked.idx === i) slot.classList.add('picked');
+      if (i < inv.hotbarCount) slot.insertBefore(el('span', 'key', String(i + 1)), slot.firstChild);
       const idx = i;
-      slot.addEventListener('click', () => {
-        const tmp = inv.slots[inv.selected];
-        inv.slots[inv.selected] = inv.slots[idx];
-        inv.slots[idx] = tmp;
-        this.renderInventory(); this.updateHotbar();
-      });
+      slot.addEventListener('click', () => this.handleSlotClick('inv', idx));
       grid.appendChild(slot);
     }
+    this.renderCraftGrid();
     this.renderCrafting();
+  }
+
+  // ---------- grid crafting (wishlist #8) ----------
+  craftCtx() {
+    const g = this.game;
+    return { nearBench: g.nearStation('bench'), tiers: g.tiers, unlocks: g.unlocks };
+  }
+
+  renderCraftGrid() {
+    const g = this.game;
+    const grid = $('craft-grid');
+    clear(grid);
+    for (let i = 0; i < 9; i++) {
+      const slot = this.slotEl(g.craftGrid[i], false);
+      if (this.picked?.cont === 'craft' && this.picked.idx === i) slot.classList.add('picked');
+      const idx = i;
+      slot.addEventListener('click', () => this.handleSlotClick('craft', idx));
+      grid.appendChild(slot);
+    }
+    // output preview
+    const out = $('craft-out');
+    const name = $('craft-out-name');
+    clear(out);
+    out.classList.remove('ready');
+    const ctx = this.craftCtx();
+    const m = matchGrid(g.craftGrid, ctx);
+    $('craft-station-note').textContent = ctx.nearBench ? '— bench nearby' : '';
+    if (m) {
+      const [outKey, outN] = Object.entries(m.recipe.out)[0];
+      out.appendChild(makeIcon(itemDef(outKey), 32));
+      if (outN > 1) out.appendChild(el('span', 'count', String(outN)));
+      out.classList.add('ready');
+      name.textContent = m.recipe.label || itemDef(outKey)?.name || m.recipe.id;
+      out.onclick = () => this.craftFromGrid();
+    } else {
+      name.textContent = '';
+      out.onclick = null;
+      // teach: the shape matches a bench recipe but there is no bench nearby
+      const benched = matchGrid(g.craftGrid, { ...ctx, nearBench: true });
+      if (benched) name.textContent = 'needs a crafting bench nearby';
+    }
+  }
+
+  craftFromGrid() {
+    const g = this.game;
+    const m = matchGrid(g.craftGrid, this.craftCtx());
+    if (!m) return;
+    if (!consumeGrid(g.craftGrid, m.recipe)) return;
+    for (const [id, n] of Object.entries(m.recipe.out)) {
+      const overflow = g.inv.add(id, n);
+      if (overflow > 0) g.dropItemAt(g.player.pos, id, overflow);
+    }
+    g.audio.craft();
+    g.onCrafted(m.recipe);
+    this.refreshInvUI();
+  }
+
+  // ---------- handbook (wishlist #9) ----------
+  renderHandbook() {
+    const g = this.game;
+    const q = ($('hb-search').value || '').trim().toLowerCase();
+    const list = $('hb-list');
+    clear(list);
+    for (const r of RECIPES) {
+      const isSmelt = !!r.smelt;
+      const st = isSmelt ? 'smelt' : (r.station || 'hand');
+      if (this._hbTab !== 'all' && this._hbTab !== st) continue;
+      const [outKey, outN] = Object.entries(r.out)[0];
+      const outDef = itemDef(outKey);
+      const rname = r.label || outDef?.name || r.id;
+      if (q && !rname.toLowerCase().includes(q)) continue;
+      const tierLocked = r.tierUnlock && !g.tiers.has(r.tierUnlock);
+      const resLocked = r.needsUnlock && !g.unlocks[r.needsUnlock];
+      const card = el('div', 'hb-card' + ((tierLocked || resLocked) ? ' locked' : ''));
+
+      // the pattern, drawn exactly as the grid wants it
+      const pat = el('div', 'hb-grid' + (r.grid ? '' : ' strip'));
+      const cellEl = (cell) => {
+        const s = el('div', 'slot mini');
+        if (cell) {
+          const d = itemDef(cell.id);
+          if (d) s.appendChild(makeIcon(d, 20));
+          if (cell.n > 1) s.appendChild(el('span', 'count', String(cell.n)));
+          s.title = d?.name || cell.id;
+        }
+        return s;
+      };
+      if (r.grid) {
+        for (let i = 0; i < 3; i++)
+          for (let j = 0; j < 3; j++) pat.appendChild(cellEl(r.grid[i]?.[j] || null));
+      } else {
+        for (const [id, n] of Object.entries(r.cost)) pat.appendChild(cellEl({ id, n }));
+      }
+      card.appendChild(pat);
+      card.appendChild(el('div', 'hb-arrow', '→'));
+      const outEl = el('div', 'hb-out');
+      if (outDef) outEl.appendChild(makeIcon(outDef, 26));
+      if (outN > 1) outEl.appendChild(el('span', 'count', String(outN)));
+      card.appendChild(outEl);
+
+      const info = el('div', 'hb-info');
+      info.appendChild(el('div', 'hb-name', rname + (outN > 1 ? ` ×${outN}` : '')));
+      const badges = el('div', 'hb-badges');
+      if (r.station === 'bench') badges.appendChild(el('span', 'hb-badge', 'BENCH'));
+      if (r.station === 'furnace') badges.appendChild(el('span', 'hb-badge', 'FURNACE'));
+      if (r.station === 'kiln') badges.appendChild(el('span', 'hb-badge', 'KILN'));
+      if (r.tierUnlock) badges.appendChild(el('span', 'hb-badge tier', r.tierUnlock.toUpperCase() + ' TIER'));
+      if (r.needsUnlock) badges.appendChild(el('span', 'hb-badge', 'RESEARCH'));
+      if (r.spec) badges.appendChild(el('span', 'hb-badge', r.spec.toUpperCase()));
+      info.appendChild(badges);
+      card.appendChild(info);
+
+      if (r.grid && !tierLocked && !resLocked) {
+        const btn = el('button', 'btn', 'Arrange');
+        btn.disabled = !this.hasWithGrid(r.cost);
+        btn.title = btn.disabled ? 'Missing materials: ' + this.costText(r.cost) : 'Move the materials into the craft grid';
+        btn.addEventListener('click', () => this.arrangeRecipe(r));
+        card.appendChild(btn);
+      }
+      list.appendChild(card);
+    }
+    if (!list.children.length) list.appendChild(el('div', 'dim', 'No recipes match.'));
+  }
+
+  // Materials count whether they sit in the inventory or already in the grid.
+  hasWithGrid(cost) {
+    const g = this.game;
+    return Object.entries(cost).every(([id, n]) => {
+      let c = g.inv.count(id);
+      for (const cell of g.craftGrid || []) if (cell && cell.id === id) c += cell.n;
+      return c >= n;
+    });
+  }
+
+  // Handbook → craft grid: pull the pattern's materials out of the inventory
+  // and lay them into the grid, then jump to the Field Kit to craft.
+  arrangeRecipe(r) {
+    const g = this.game;
+    g.returnCraftGrid(); // grid contents rejoin the pool first, then re-check
+    if (!g.inv.has(r.cost)) { g.toast('Missing materials.'); this.refreshInvUI(); return; }
+    r.grid.forEach((rowCells, i) => (rowCells || []).forEach((cell, j) => {
+      if (!cell) return;
+      g.inv.remove(cell.id, cell.n);
+      g.craftGrid[i * 3 + j] = { id: cell.id, n: cell.n };
+    }));
+    this.show('inv-screen');
+    this.renderInventory();
+    if (r.station === 'bench' && !g.nearStation('bench')) {
+      g.toast('Pattern arranged — but this one needs a crafting bench nearby.', 'important');
+    } else {
+      g.toast('Pattern arranged — click the output to craft.');
+    }
   }
 
   costText(cost) {
@@ -605,6 +839,8 @@ export class HUD {
       ['acc-distortion', 'reduceDistortion'],
       ['acc-flashing', 'noFlashing'],
       ['acc-audio', 'hallucinationAudio'],
+      ['acc-shadows', 'shadows'],
+      ['acc-sky', 'fancySky'],
     ];
     for (const [id, key] of opts) {
       const box = $(id);

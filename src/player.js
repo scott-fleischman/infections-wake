@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER, BLOCKS, B } from './config.js';
+import { PLAYER, BLOCKS, B, COMBAT } from './config.js';
 
 // First-person controller: pointer-lock look, WASD move, AABB voxel collision,
 // and a DDA raycast for break/place/interact targeting.
@@ -28,6 +28,7 @@ export class Player {
     this.hurtCooldown = 0;
     this.lastDamageT = 0;
     this.headBob = 0;
+    this.kbT = 0; // knockback window: reduced input authority while shoved
   }
 
   spawnAt(p) {
@@ -96,8 +97,11 @@ export class Player {
     mx /= len; mz /= len;
     const w = moveBasis(mx, mz, this.yaw);
     const targetVx = w.x * speed, targetVz = w.z * speed;
-    // smooth accel
-    const accel = this.onGround ? 14 : this.inWater ? 8 : 4;
+    // smooth accel — a fresh shove briefly overrides input authority so the
+    // impulse isn't instantly steered away
+    this.kbT = Math.max(0, this.kbT - dt);
+    let accel = this.onGround ? 14 : this.inWater ? 8 : 4;
+    if (this.kbT > 0) accel *= COMBAT.playerKbAccelMul;
     this.vel.x += (targetVx - this.vel.x) * Math.min(1, accel * dt);
     this.vel.z += (targetVz - this.vel.z) * Math.min(1, accel * dt);
 
@@ -227,9 +231,23 @@ export class Player {
     }
   }
 
+  // Shoved by an infected's landed hit: horizontal impulse away from the
+  // attacker plus a small pop when grounded (fall-damage risk is the cost of
+  // fighting on a roofline).
+  applyKnockback(fromPos) {
+    const dx = this.pos.x - fromPos.x, dz = this.pos.z - fromPos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    this.vel.x += dx / len * COMBAT.playerKb;
+    this.vel.z += dz / len * COMBAT.playerKb;
+    if (this.onGround) this.vel.y = Math.max(this.vel.y, COMBAT.playerKbUp);
+    this.kbT = COMBAT.playerKbT;
+  }
+
+  // Returns false when the hit was absorbed by i-frames (callers use this to
+  // decide whether to apply knockback).
   damage(amount, cause = '', silent = false) {
-    if (this.game.state !== 'play') return;
-    if (this.hurtCooldown > 0 && !silent) return;
+    if (this.game.state !== 'play') return false;
+    if (this.hurtCooldown > 0 && !silent) return false;
     // §11.1 combat branch: a carried iron harness absorbs part of each hit
     // and wears out doing it (only real hits, not starvation/drowning ticks)
     if (!silent && amount > 1) {
@@ -244,6 +262,7 @@ export class Player {
       this.game.sanity?.onInjury?.(amount); // §7.3 severe injury shakes stability
     }
     if (this.health <= 0) { this.health = 0; this.game.onPlayerDeath(cause); }
+    return true;
   }
 
   heal(a) { this.health = Math.min(PLAYER.maxHealth, this.health + a); }

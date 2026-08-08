@@ -12,6 +12,17 @@ line, survive its startup siege, descend into the Lazarus Deep Site, open the
 three purge galleries, and silence the reservoir — then keep playing into the
 reclamation endgame at a fixed maximum enemy tier.
 
+**Latest build** (the wishlist update): a 192×192 valley with walk-in **ore
+hills** (visible, finite, Factorio-style deposits), 30-minute days in two
+15-minute halves, melee **knockback** both ways, a hard new rule that **only
+machine eaters break blocks — and only machine blocks** (your walls and doors
+are safe; burrowers still push through loose soil), Vintage-Story-style
+**click-to-move inventory**, **3×3 grid crafting** with hand-authored patterns
+for every recipe, a searchable **Handbook `[H]`** that draws each recipe as its
+grid pattern and can auto-arrange materials, procedurally **textured blocks**
+(runtime canvas atlas — still zero image assets), and a graphics pass: sun
+shadows, ACES tone mapping, gradient sky with sun, moon, and stars.
+
 ## Run it
 
 ```bash
@@ -46,7 +57,7 @@ the original project input in the browser (no innerHTML — a small markdown
 renderer in `src/markdown.js`), with a PLAY NOW link back to the game.
 
 **Dev scenarios:** the start menu's DEV SCENARIOS strip (or
-`?scenario=<tooled|fortified|ironage|powered|lab|boss|steel|transit|deepsite|endgame>[&seed=…]`)
+`?scenario=<tooled|miner|fortified|ironage|powered|lab|boss|steel|transit|deepsite|endgame>[&seed=…]`)
 jumps to a story checkpoint with a matching world — tools granted, machines
 placed and fueled, campaign flags set, player teleported. Scenario links never
 overwrite a real save; that takes an explicit menu click.
@@ -60,7 +71,8 @@ overwrite a real save; that takes an explicit menu click.
 | LMB (hold) | Break block (crosshair ring fills) / attack |
 | RMB | Place block / eat / use item |
 | 1–6, Q | Select hotbar slot |
-| E | Field kit (inventory + fabrication) |
+| E | Field kit — click an item, click where it goes; 3×3 craft grid + quick craft |
+| H | Handbook — every recipe drawn as its grid pattern, searchable, with auto-arrange |
 | F | Interact — doors, machines, archives, beds, campfires, valves, the radio |
 | J | Story Log & bestiary |
 | M | Valley map — marks appear as you survey |
@@ -72,10 +84,16 @@ overwrite a real save; that takes an explicit menu click.
    wall up the ruined shack. The forecast panel warns you at dusk.
 2. **Night:** one major assault per night. Its composition answers whatever
    signature you broadcast loudest — blood draws runners, current draws
-   machine eaters.
-3. **Iron:** mine coal + iron in the caves, smelt at a furnace. Iron opens
-   the field beacon (a rebuildable recovery point), weapons, plating, and
-   the power tier: generator, cables, lamps, drill, turret.
+   machine eaters. Your walls and doors hold: **only machine eaters can break
+   blocks, and only machine blocks** (machines and cables). Climbers still
+   climb, spitters still arc over, burrowers still push through loose soil —
+   the threat moved from your walls to your gaps.
+3. **Iron:** find an **ore hill** — stone mounds with ore showing on their
+   flanks and a chamber inside; every deposit is finite, so mine it out and
+   move on (drills parked on a deposit eat through it too). Smelt at a
+   furnace. Iron opens the field beacon (a rebuildable recovery point),
+   weapons, plating, and the power tier: generator, cables, lamps, drill,
+   turret. Discovered hills are marked on the map `[M]`.
 4. **Mind the ladder:** the shack's emergency pad recovers you **once**.
    A field beacon needs power, registration, and a biotic ampoule — and it
    must be powered *at the moment you die*. If every layer is gone, the run
@@ -115,8 +133,11 @@ Systems map 1:1 onto the spec's module list (§23):
 
 | File | System |
 | --- | --- |
-| `src/config.js` | All data-driven tunables: blocks, items, recipes, machines, strain sense profiles, threat compositions (§22) |
-| `src/world.js` | Chunked voxel world, generation, meshing with AO + sky-light shading |
+| `src/config.js` | All data-driven tunables: blocks, items, recipes (with grid patterns), machines, strain sense profiles, threat compositions (§22) |
+| `src/crafting.js` | Grid-crafting matcher: translation-invariant pattern matching + consumption (pure, headless-tested) |
+| `src/world.js` | Chunked voxel world, generation (incl. ore hills), meshing with AO + sky-light shading + texture-atlas UVs |
+| `src/textures.js` | Runtime canvas texture atlas — neutral-luminance tiles multiplied over the vertex-color light bake |
+| `src/sky.js` | Sky dome, sun/moon discs, starfield |
 | `src/models.js` | Model registry: machine props, infected bodies, block display meshes — shared by game + gallery |
 | `src/props.js` | In-world prop lifecycle + animation (turret aim, flywheels, fire flicker) |
 | `src/icons.js` | Canvas item-icon painter — shared by HUD + gallery |
@@ -144,7 +165,7 @@ presentation only, never simulation state.
 
 ## Testing
 
-`npm test` runs 133 headless tests (Node's built-in runner, no browser):
+`npm test` runs 160+ headless tests (Node's built-in runner, no browser):
 movement math, worldgen determinism and structure placement (including the
 transit station, Deep Site galleries, industrial ruin, flooded annex, and
 secondary reservoirs on multiple seeds), signature falloff/wall attenuation,

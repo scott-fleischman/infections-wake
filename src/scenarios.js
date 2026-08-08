@@ -102,6 +102,25 @@ export const SCENARIOS = {
       setTime(g, 1, TIME.DUSK - 0.04);
     },
   },
+  miner: {
+    name: 'Day 2 — at the ore hill',
+    desc: 'Standing on the nearest ore hill with picks and torches. The deposit below is finite — mine it out.',
+    apply(g) {
+      sealShack(g);
+      give(g, { stone_pick: 1, iron_pick: 1, stone_spear: 1, 'b:38': 10, cooked_meat: 4 });
+      const s = g.world.poi.spawn;
+      let best = null;
+      for (const m of g.world.poi.mines || []) {
+        if (!best || Math.hypot(m.x - s.x, m.z - s.z) < Math.hypot(best.x - s.x, best.z - s.z)) best = m;
+      }
+      if (best) {
+        const y = g.world.skyTop(best.x, best.z);
+        g.player.pos.set(best.x + 0.5, y + 0.02, best.z + 0.5);
+        g.player.vel.set(0, 0, 0);
+      }
+      setTime(g, 2, 0.3);
+    },
+  },
   ironage: {
     name: 'Day 2 — iron age',
     desc: 'Furnace running, iron tools in hand, the power tier within reach.',

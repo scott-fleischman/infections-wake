@@ -337,6 +337,62 @@ html, body {
 .recipe.locked { opacity: 0.45; }
 .recipe .btn { padding: 4px 12px; font-size: 11px; }
 
+/* click-move + grid crafting (wishlist #7/#8) */
+.slot.picked {
+  border-color: var(--amber-hot);
+  box-shadow: 0 0 12px rgba(224,168,62,0.55), inset 0 0 10px rgba(224,168,62,0.25);
+  transform: scale(1.06);
+}
+#craft-area { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+#craft-grid { display: grid; grid-template-columns: repeat(3, 52px); gap: 4px; }
+#craft-grid .slot, #craft-out { pointer-events: auto; cursor: pointer; }
+#craft-arrow { font-size: 26px; color: var(--ink-dim); }
+#craft-out-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+#craft-out { width: 60px; height: 60px; background: var(--panel); border: 1px solid var(--panel-edge);
+  position: relative; display: flex; align-items: center; justify-content: center; }
+#craft-out.ready { border-color: var(--amber); box-shadow: 0 0 12px rgba(224,168,62,0.4); }
+#craft-out .icon { width: 32px; height: 32px; image-rendering: pixelated; }
+#craft-out .count { position: absolute; right: 4px; bottom: 2px; font-size: 11px; color: var(--ink); text-shadow: 0 1px 2px #000; }
+#craft-out-name { font-size: 10px; max-width: 110px; text-align: center; min-height: 24px; }
+#craft-station-note { font-size: 10px; }
+.craft-actions { margin: 4px 0 10px; }
+.craft-actions .btn { padding: 4px 10px; font-size: 11px; pointer-events: auto; }
+#inv-screen h3 { margin-top: 4px; }
+
+/* handbook (wishlist #9) */
+#hb-controls { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+#hb-search {
+  background: var(--panel); border: 1px solid var(--panel-edge); color: var(--ink);
+  font-family: inherit; font-size: 13px; padding: 7px 12px; width: 240px; pointer-events: auto;
+}
+#hb-search:focus { outline: none; border-color: var(--amber); }
+#hb-tabs { display: flex; gap: 6px; }
+#hb-list { max-height: 62vh; overflow-y: auto; padding-right: 8px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; }
+.hb-card {
+  display: flex; align-items: center; gap: 12px;
+  border: 1px solid var(--panel-edge); background: rgba(255,255,255,0.025); padding: 8px 10px;
+}
+.hb-card.locked { opacity: 0.45; }
+.hb-grid { display: grid; grid-template-columns: repeat(3, 30px); gap: 2px; flex: none; }
+.hb-grid.strip { display: flex; gap: 2px; }
+.slot.mini { width: 30px; height: 30px; }
+.slot.mini .icon { width: 20px; height: 20px; }
+.slot.mini .count { font-size: 9px; right: 2px; bottom: 0; }
+.hb-arrow { color: var(--ink-dim); font-size: 18px; flex: none; }
+.hb-out { position: relative; width: 40px; height: 40px; flex: none;
+  background: var(--panel); border: 1px solid var(--panel-edge);
+  display: flex; align-items: center; justify-content: center; }
+.hb-out .icon { width: 26px; height: 26px; image-rendering: pixelated; }
+.hb-out .count { position: absolute; right: 2px; bottom: 0; font-size: 9px; color: var(--ink); text-shadow: 0 1px 2px #000; }
+.hb-info { flex: 1; min-width: 0; }
+.hb-name { font-weight: 600; color: var(--ink); font-size: 13px; }
+.hb-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 3px; }
+.hb-badge { font-size: 9px; letter-spacing: 0.08em; color: var(--ink-dim);
+  border: 1px solid var(--panel-edge); padding: 1px 6px; }
+.hb-badge.tier { color: var(--amber); border-color: rgba(224,168,62,0.4); }
+.hb-card .btn { padding: 4px 10px; font-size: 11px; pointer-events: auto; flex: none; }
+
 /* story log */
 #log-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .tab {

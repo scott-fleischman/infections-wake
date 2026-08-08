@@ -6,7 +6,9 @@ import { WORLD, B } from './config.js';
 // known bodies, and reclamation state. Knowledge is equipment — the map only
 // shows what the run has earned.
 
-const SCALE = 4; // canvas pixels per world cell
+// canvas pixels per world cell — adaptive so the map stays ~512px however
+// large the world grows
+const SCALE = Math.max(2, Math.floor(512 / WORLD.SIZE_X));
 
 const SURF_COLORS = {
   [B.GRASS]: [79, 122, 58], [B.SAND]: [191, 168, 120], [B.WATER]: [44, 93, 138],
@@ -84,6 +86,10 @@ export class ValleyMap {
       for (const v of d.valves) mark(v.x, v.z, `V${v.index}${g.deep.valves[v.index - 1] ? ' ✓' : ''}`, g.deep.valves[v.index - 1] ? '#7fae62' : '#d94f4f');
       mark(d.roane.x, d.roane.z, g.deep.purged ? 'RESERVOIR (silent)' : 'RESERVOIR', g.deep.purged ? '#7fae62' : '#d94f4f');
     }
+    // ore hills discovered on foot (wishlist #4)
+    (poi.mines || []).forEach((m, i) => {
+      if (g.minesSeen?.has(i)) mark(m.x, m.z, m.kind === 'iron' ? 'IRON HILL' : 'COAL HILL', m.kind === 'iron' ? '#c9a58a' : '#8a8f96');
+    });
     // §19 reclamation targets, once surveyed
     for (const r of poi.reservoirs || []) {
       if (flags.has('reclaim:' + r.id)) mark(r.x, r.z, 'STERILIZED', '#7fae62');
