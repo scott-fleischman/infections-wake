@@ -362,6 +362,7 @@ function instancedBlocks(id, cells) {
   const m4 = new THREE.Matrix4();
   cells.forEach((c, i) => { m4.makeTranslation(c[0], c[1] + 0.5, c[2]); inst.setMatrixAt(i, m4); });
   inst.castShadow = inst.receiveShadow = true;
+  inst.frustumCulled = false; // culling would use the base cube's bounds, not the instances'
   return inst;
 }
 
