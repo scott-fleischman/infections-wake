@@ -24,6 +24,18 @@ import { Sky } from './sky.js';
 
 const $ = (id) => document.getElementById(id);
 
+// Radial fog: stock three.js fog uses planar view depth (-mvPosition.z), so a
+// mesh 112 blocks away at the screen edge reads as only ~67 deep and renders
+// mostly unfogged — exposing the streamed-terrain frontier whenever the camera
+// yaws off-axis. Distance fog makes fog.far a true radius, so "far < mesh
+// radius" holds in every screen direction. Must run before any material
+// compiles; sky/dome materials opt out with fog:false as before.
+THREE.ShaderChunk.fog_vertex = `
+#ifdef USE_FOG
+	vFogDepth = length( mvPosition.xyz );
+#endif
+`;
+
 class Game {
   constructor() {
     // three.js scaffolding
@@ -50,7 +62,8 @@ class Game {
     this.hemi = new THREE.HemisphereLight(0xbdd3e8, 0x3a3428, 0.9);
     this.scene.add(this.sun, this.sun.target, this.hemi);
     // fog far sits just inside the streamed mesh radius (7 chunks = 112
-    // blocks) so the edge of loaded terrain is always hidden in haze
+    // blocks) so the edge of loaded terrain is always hidden in haze —
+    // radially, in every screen direction (see the fog_vertex override above)
     this.scene.fog = new THREE.Fog(0x9db4c8, 40, 106);
     this.sky = new Sky(this.scene);
 
@@ -1940,7 +1953,8 @@ class Game {
       if (this.scene.background) this.scene.background = null;
     }
     // subtle night fear: fog closes in (day far stays inside the 112-block
-    // streamed mesh radius so unloaded terrain never shows)
+    // streamed mesh radius so unloaded terrain never shows — fog depth is
+    // radial distance, so this holds at the screen edges too)
     this.scene.fog.near = 24 + dl * 22;
     this.scene.fog.far = 84 + dl * 22;
   }
@@ -2147,9 +2161,14 @@ class Game {
       }
       const d = Math.hypot(pk.x - p.x, pk.y - (p.y + 0.8), pk.z - p.z);
       // scatter is invisible at range anyway — culling it keeps the draw
-      // count flat however many chunks are resident
+      // count flat however many chunks are resident. Shrink over the last
+      // few blocks so the cutoff never pops against half-fogged terrain.
       const vis = d < 64;
       if (pk.mesh.visible !== vis) pk.mesh.visible = vis;
+      if (vis) {
+        const s = Math.min(1, (64 - d) / 10);
+        if (Math.abs(pk.mesh.scale.x - s) > 0.01) pk.mesh.scale.setScalar(s);
+      }
       if (d < 2.0) { // magnet
         pk.grounded = false;
         pk.x += (p.x - pk.x) * 6 * dt;
@@ -2159,12 +2178,19 @@ class Game {
       }
       if (d < 0.9) {
         const overflow = this.inv.add(pk.item, pk.n);
-        if (overflow < pk.n) { this.audio.pickup(); this.hud.updateHotbar(); }
+        if (overflow < pk.n) {
+          this.audio.pickup(); this.hud.updateHotbar();
+          // bank the claim the moment ANY of the stack is pocketed: a
+          // partially drained pickup must never re-materialize at full size
+          // after chunk eviction or a reload (the leftover sliver is forfeit
+          // if abandoned — the conservative side of no duplication)
+          if (pk.idx >= 0) this.pickupsTaken.add(pk.idx);
+          if (pk.wildKey) this.wildTaken.add(pk.wildKey);
+        }
         pk.n = overflow; // whatever didn't fit stays on the ground — no duplication
         if (overflow === 0) {
           pk.taken = true;
-          if (pk.idx >= 0) this.pickupsTaken.add(pk.idx);
-          if (pk.wildKey) { this.wildTaken.add(pk.wildKey); this._wildActive.delete(pk.wildKey); }
+          if (pk.wildKey) this._wildActive.delete(pk.wildKey);
           if (pk.sigKey) this.sig.removeDynamic(pk.sigKey);
           this.scene.remove(pk.mesh);
           disposeGroup(pk.mesh);

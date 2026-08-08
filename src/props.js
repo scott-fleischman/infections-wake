@@ -1,6 +1,10 @@
 import { WORLD, B, BLOCKS } from './config.js';
 import { buildProp, animateProp, disposeGroup } from './models.js';
 
+// prop kinds whose animation state follows a machine entry (queried per frame)
+const MACHINE_KINDS = new Set(['generator', 'drill', 'lamp', 'beacon', 'turret', 'cradle',
+  'battery', 'switch', 'scrubber', 'uv', 'vibturret', 'sensor', 'maint', 'transit_panel']);
+
 // Prop meshes for model-rendered blocks (config `model:` flag). The world data
 // still holds the block id — collision, mining, chewing and power all work on
 // the voxel grid; this manager only owns the detailed visual standing in the
@@ -100,8 +104,6 @@ export class Props {
   update(dt) {
     this.t += dt;
     const g = this.game;
-    const MACHINE_KINDS = new Set(['generator', 'drill', 'lamp', 'beacon', 'turret', 'cradle',
-      'battery', 'switch', 'scrubber', 'uv', 'vibturret', 'sensor', 'maint', 'transit_panel']);
     const p = g.player?.pos;
     for (const e of this.map.values()) {
       // distance cull: a fog-shrouded prop 100+ blocks out costs draw calls

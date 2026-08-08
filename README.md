@@ -52,9 +52,11 @@ sources live in `windows/`; the assembler is `scripts/build-windows-dist.mjs`.
 
 **Model archive:** `/gallery.html` (linked from the start menu) is a viewer
 for every model in the game — machines, infected specimens, blocks, ground
-litter, item icons, and seeded tree generation — rendered with the exact same
-builders the game uses (`src/models.js`, `treeShape()`), on a drag-to-rotate
-turntable.
+litter, item icons, seeded tree generation, wild **ore-hill landforms**, and
+an **atmosphere deck** (the game's sky dome at dawn, noon, dusk and night) —
+rendered with the exact same builders, texture atlas, tone mapping and
+shadows the game uses (`src/models.js`, `treeShape()`, `oreHillShape()`,
+`sky.js`), on a drag-to-rotate turntable under a camera-tracking studio rig.
 
 **Field manual:** `/docs.html` renders this README, the full design spec, and
 the original project input in the browser (no innerHTML — a small markdown

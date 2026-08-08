@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { B, BLOCKS, STRAINS } from './config.js';
+import { getBlockAtlas } from './textures.js';
 
 // ============================================================================
 // Model registry. Every non-cube visual in the game is built here so the
@@ -840,25 +841,49 @@ export function buildGroundItem(itemId, seed = 0) {
   return null;
 }
 
+// Remap a BoxGeometry's per-face UVs onto block-atlas tiles so display cubes
+// (gallery cubes, dropped mini blocks) carry the exact surface detail the
+// terrain mesher bakes in-world. faces: 6 tile names in BoxGeometry group
+// order (+x, -x, +y, -y, +z, -z). No-op headless (atlas is null there).
+const CUBE_FACES = ['side', 'side', 'top', 'bottom', 'side', 'side'];
+function atlasBoxUV(geo, id, atlas, faces = CUBE_FACES) {
+  const uv = geo.attributes.uv;
+  for (let f = 0; f < 6; f++) {
+    const [u0, v0, u1, v1] = atlas.tileUV(id, faces[f]);
+    for (let i = f * 4; i < f * 4 + 4; i++)
+      uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+  }
+  uv.needsUpdate = true;
+}
+
 export function buildBlockMesh(id) {
   const def = BLOCKS[id];
   const g = new THREE.Group();
   if (!def) return g;
   if (def.model) { const p = buildProp(def.model, { tint: def.col }); g.add(p); return g; }
+  const atlas = getBlockAtlas();
   const top = Array.isArray(def.col) ? def.col[0] : def.col;
   const side = Array.isArray(def.col) ? def.col[1] : def.col;
   const bottom = Array.isArray(def.col) ? def.col[2] : def.col;
   const opts = def.transparent || def.liquid ? { transparent: true, opacity: 0.72 } : {};
+  const texd = (mat) => { if (atlas) mat.map = atlas.texture; return mat; };
   if (def.slim) {                                              // wire & co: flat strip
-    box(g, 0.7, 0.14, 0.24, lambert(side, opts), 0, 0.07, 0);
-    box(g, 0.24, 0.14, 0.7, lambert(side, opts), 0, 0.07, 0);
+    const s1 = box(g, 0.7, 0.14, 0.24, texd(lambert(side, opts)), 0, 0.07, 0);
+    const s2 = box(g, 0.24, 0.14, 0.7, texd(lambert(side, opts)), 0, 0.07, 0);
+    if (atlas) {
+      const all = ['side', 'side', 'side', 'side', 'side', 'side'];
+      atlasBoxUV(s1.geometry, id, atlas, all);
+      atlasBoxUV(s2.geometry, id, atlas, all);
+    }
     return g;
   }
-  const mats = [side, side, top, bottom, side, side].map(c => lambert(c, opts));
-  const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mats);
+  const mats = [side, side, top, bottom, side, side].map(c => texd(lambert(c, opts)));
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  if (atlas) atlasBoxUV(geo, id, atlas);
+  const m = new THREE.Mesh(geo, mats);
   m.position.y = 0.5;
   g.add(m);
-  if (def.accent) {                                            // ore flecks
+  if (def.accent && !atlas) {   // ore flecks — the atlas tile already paints these
     for (let i = 0; i < 7; i++) {
       const a = i * 2.39996;
       const f = box(g, 0.12, 0.12, 0.02, lambert(def.accent), Math.cos(a) * 0.3, 0.35 + (i % 3) * 0.18, 0.505);
@@ -901,7 +926,8 @@ export function animateProp(group, t, state = {}) {
 }
 
 export function disposeGroup(group) {
-  const disposeMat = (m) => { if (m.map) m.map.dispose(); m.dispose(); };
+  // shared maps (the block atlas) outlive any one mesh — never dispose them
+  const disposeMat = (m) => { if (m.map && !m.map.userData.shared) m.map.dispose(); m.dispose(); };
   group.traverse(o => {
     if (o.geometry) o.geometry.dispose();
     if (o.material) {

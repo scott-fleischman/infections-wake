@@ -152,3 +152,87 @@ test('poi.mines and poi.nests track resident wilderness chunks', () => {
   w2.evictChunk(w2.chunkKey(hcx, hcz), chunk);
   assert.equal(w2.poi.mines.length, coreMines, 'wild mine unregistered on eviction');
 });
+
+// ---------------- review regressions (2026-08-08 streamed-world audit) ----
+
+test('scanWorld re-registers wilderness emitters (edit-pinned chunks survive load)', async () => {
+  const { Signature } = await import('../src/signature.js');
+  const w2 = generated('sig-wild');
+  // a player campfire 700 blocks out, applied exactly the way a reload does
+  const ex = 700, ey = 30, ez = 700;
+  w2.applyEdits([[ex, ey, ez, B.CAMPFIRE]]);
+  const sig = new Signature({ world: w2 });
+  sig.scanWorld();
+  assert.ok(sig.staticEm.has(`${ex},${ey},${ez}`),
+    'player-placed wilderness campfire is registered after scanWorld');
+
+  // a streamed chunk with a generated nest keeps its emitters through a rescan
+  let nest = null;
+  for (let cx = 14; cx < 120 && !nest; cx++)
+    for (let cz = 14; cz < 40 && !nest; cz++) {
+      const stamp = w2.featureStamp(cx, cz);
+      if (stamp.nests.length) { w2.ensureChunkData(cx, cz); nest = stamp.nests[0]; }
+    }
+  assert.ok(nest, 'search window contains at least one stamped nest');
+  sig.scanWorld();
+  assert.ok(sig.staticEm.has(`${nest.x},${nest.y},${nest.z}`),
+    'streamed nest emitter survives scanWorld');
+});
+
+test('active-assault mobs are exempt from the distance despawn', async () => {
+  const { InfectedManager } = await import('../src/infected.js');
+  const { Signature } = await import('../src/signature.js');
+  const { makeStubGame } = await import('./helpers.js');
+  const w2 = generated('despawn-siege');
+  const game = makeStubGame({ world: w2 });
+  game.player.pos.set(96, 30, 96);
+  game.sig = new Signature(game);
+  game.director = { assaultActive: true };
+  const inf = new InfectedManager(game);
+  game.infected = inf;
+  const sieger = inf.spawn('drifter', 400, 30, 400, { fromAssault: true });
+  const stray = inf.spawn('drifter', 410, 30, 410, {});
+  inf.update(0.05);
+  assert.ok(!sieger.dead, 'assault member 300 blocks out survives while the assault runs');
+  assert.ok(stray.dead, 'ordinary wanderer at the same range still despawns');
+  game.director.assaultActive = false;
+  inf.update(0.05);
+  assert.ok(sieger.dead, 'a leftover sieger is reclaimed once the assault ends');
+});
+
+test('a body in a not-yet-streamed chunk freezes instead of levitating', async () => {
+  const { InfectedManager } = await import('../src/infected.js');
+  const { Signature } = await import('../src/signature.js');
+  const { makeStubGame } = await import('./helpers.js');
+  const w2 = generated('freeze-far');
+  const game = makeStubGame({ world: w2 });
+  game.player.pos.set(96, 30, 96);
+  game.sig = new Signature(game);
+  game.director = { assaultActive: true };
+  const inf = new InfectedManager(game);
+  game.infected = inf;
+  // restored from a save far outside the generation ring: its chunk is absent,
+  // so get() serves BEDROCK stand-ins — the body must hold position, not rise
+  const host = inf.spawn('drifter', 400, 30, 400, { fromAssault: true });
+  const y0 = host.pos.y;
+  for (let i = 0; i < 20; i++) inf.update(0.05);
+  assert.equal(host.pos.y, y0, 'no ceiling levitation on bedrock stand-ins');
+  // once the ground streams in it settles onto terrain (up or down —
+  // the column may hold an ore-hill dome) and stays put
+  w2.ensureChunkData(Math.floor(400 / WORLD.CHUNK), Math.floor(400 / WORLD.CHUNK));
+  for (let i = 0; i < 20; i++) inf.update(0.05);
+  const y1 = host.pos.y;
+  for (let i = 0; i < 20; i++) inf.update(0.05);
+  assert.ok(Math.abs(host.pos.y - y1) < 2.5, 'settled on terrain, not ratcheting upward');
+  assert.ok(host.pos.y < WORLD.HEIGHT - 8, 'nowhere near the world ceiling');
+});
+
+test('no wilderness trunks within 2 blocks of the story core (canopy seam guard)', () => {
+  const { CORE_X, CORE_Z } = WORLD;
+  for (let z = -2; z < CORE_Z + 2; z++)
+    for (const x of [-2, -1, CORE_X, CORE_X + 1])
+      assert.equal(w.treeAt(x, z), false, `no trunk at ${x},${z}`);
+  for (let x = -2; x < CORE_X + 2; x++)
+    for (const z of [-2, -1, CORE_Z, CORE_Z + 1])
+      assert.equal(w.treeAt(x, z), false, `no trunk at ${x},${z}`);
+});

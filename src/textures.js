@@ -696,6 +696,7 @@ function buildAtlas() {
   }
 
   const texture = new THREE.CanvasTexture(canvas);
+  texture.userData.shared = true; // singleton — disposeGroup must skip it
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestMipmapLinearFilter;

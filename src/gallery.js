@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { B, B_NAME, BLOCKS, ITEMS, STRAINS, MACHINES } from './config.js';
+import { B, B_NAME, BLOCKS, ITEMS, STRAINS, MACHINES, TIME, WORLDGEN } from './config.js';
 import { buildProp, buildInfectedMesh, buildBlockMesh, buildGroundItem, animateProp, disposeGroup } from './models.js';
-import { treeShape } from './world.js';
+import { treeShape, oreHillShape } from './world.js';
+import { Sky } from './sky.js';
 import { RNG } from './rng.js';
 import { makeIcon } from './icons.js';
 import { itemDef } from './inventory.js';
@@ -76,6 +77,7 @@ const CATS = {
   blocks: { title: 'MATERIALS', mode: '3d' },
   items: { title: 'FIELD KIT', mode: 'icons' },
   trees: { title: 'FLORA', mode: 'trees' },
+  atmosphere: { title: 'ATMOSPHERE', mode: '3d' },
 };
 
 // ---------- three.js viewer ----------
@@ -83,26 +85,44 @@ const CATS = {
 const viewport = $('g-viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// the exact grade the game renders with: filmic tone mapping + soft shadows
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35; // brighter grade than in-game: dark-steel props on a black stage
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(42, 1, 0.05, 200);
-const sun = new THREE.DirectionalLight(0xffe8c0, 1.7);
+// studio rig: warm key (shadow-casting), cool rim, soft fill — retuned for
+// ACES, which pulls mids down compared to the old linear output
+const LIGHTS = { sun: 3.2, back: 1.2, fill: 0.9, hemi: 2.0 };
+const sun = new THREE.DirectionalLight(0xffe8c0, LIGHTS.sun);
 sun.position.set(4, 7, 3);
-const back = new THREE.DirectionalLight(0x74c7c4, 0.7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.05;
+const back = new THREE.DirectionalLight(0x74c7c4, LIGHTS.back);
 back.position.set(-5, 4, -5);
-const fill = new THREE.DirectionalLight(0xcfe3d4, 0.5);
+const fill = new THREE.DirectionalLight(0xcfe3d4, LIGHTS.fill);
 fill.position.set(-3, 2, 6);
-scene.add(sun, back, fill, new THREE.HemisphereLight(0xbdd3e8, 0x4a4438, 1.25));
+const hemi = new THREE.HemisphereLight(0xbdd3e8, 0x4a4438, LIGHTS.hemi);
+scene.add(sun, sun.target, back, fill, hemi);
 
 const ground = new THREE.Group();
 const disc = new THREE.Mesh(new THREE.CircleGeometry(2.6, 48),
   new THREE.MeshBasicMaterial({ color: 0x0a120d, transparent: true, opacity: 0.85 }));
 disc.rotation.x = -Math.PI / 2;
 disc.position.y = -0.012;
+const catcher = new THREE.Mesh(new THREE.CircleGeometry(2.6, 48),
+  new THREE.ShadowMaterial({ opacity: 0.34 }));
+catcher.rotation.x = -Math.PI / 2;
+catcher.position.y = -0.006;
+catcher.receiveShadow = true;
 const polar = new THREE.PolarGridHelper(2.6, 8, 5, 48, 0x2a4034, 0x18241c);
 polar.position.y = -0.01;
-ground.add(disc, polar);
+ground.add(disc, catcher, polar);
 scene.add(ground);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -123,9 +143,11 @@ let current = null;          // displayed THREE.Group
 let currentAnim = null;      // { running } for animateProp
 
 function showObject(group, { groundScale = 1, animState = { running: true } } = {}) {
+  if (skyView) leaveSkyView();
   if (current) { scene.remove(current); disposeGroup(current); }
   current = group;
   currentAnim = animState;
+  group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(group);
   ground.scale.setScalar(groundScale);
   // frame it
@@ -137,6 +159,83 @@ function showObject(group, { groundScale = 1, animState = { running: true } } = 
   camera.position.set(center.x + r * 1.9, center.y + r * 1.1, center.z + r * 1.9);
   camera.near = r / 50; camera.far = r * 60;
   camera.updateProjectionMatrix();
+  // the key light tracks the subject so its shadow frustum stays tight;
+  // its per-frame position follows the camera (see frame()) so the facing
+  // side is always the lit side — the turntable spins, the studio doesn't
+  modelR = r;
+  sun.target.position.copy(center);
+  const sc = sun.shadow.camera;
+  sc.left = -r * 2; sc.right = r * 2; sc.top = r * 2; sc.bottom = -r * 2;
+  sc.near = 0.1; sc.far = r * 12;
+  sc.updateProjectionMatrix();
+}
+
+let modelR = 1; // framing radius of the current subject, for the key light
+
+// ---------- atmosphere (the game's sky dome, dawn to night) ----------
+
+let gallerySky = null;   // lazy Sky instance (dome + discs + starfield)
+let skyView = null;      // { sunAngle, daylight, horizon } while active
+
+// mirrors Game.daylight() and updateSky()'s palette for a given day fraction
+function skyStateAt(f) {
+  let dl;
+  if (f < TIME.DAWN - 0.04 || f > TIME.NIGHT) dl = 0.02;
+  else if (f < TIME.DAWN_END) dl = 0.02 + 0.98 * ((f - (TIME.DAWN - 0.04)) / (TIME.DAWN_END - TIME.DAWN + 0.04));
+  else if (f > TIME.DUSK) dl = Math.max(0.02, 1 - (f - TIME.DUSK) / (TIME.NIGHT - TIME.DUSK));
+  else dl = 1;
+  const day = new THREE.Color(0x9db4c8), duskC = new THREE.Color(0x8a5a48), night = new THREE.Color(0x0a0f1a);
+  let horizon;
+  if (f > TIME.DUSK && f < TIME.NIGHT) horizon = duskC.clone().lerp(night, (f - TIME.DUSK) / (TIME.NIGHT - TIME.DUSK));
+  else if (dl <= 0.05) horizon = night;
+  else if (f > TIME.DAWN - 0.04 && f < TIME.DAWN_END) horizon = night.clone().lerp(day, dl);
+  else horizon = day;
+  return { sunAngle: (f - 0.25) * Math.PI * 2, daylight: dl, horizon };
+}
+
+const SKY_PRESETS = {
+  dawn: { f: 0.27, name: 'Dawn', sub: 'day begins', desc: 'First light over the valley. The forecast panel resets; whatever the night left standing is yours again.' },
+  noon: { f: 0.5, name: 'Noon', sub: 'full light', desc: 'The sun disc rides a camera-locked dome — the same gradient, sun, moon and starfield the game renders, drawn here for inspection.' },
+  dusk: { f: 0.78, name: 'Dusk', sub: 'forecast hour', desc: 'The horizon band reddens as daylight ramps down. In the valley this is when the dusk forecast calls tonight\'s assault.' },
+  night: { f: 0.95, name: 'Night', sub: 'starfield', desc: 'Full dark: 450 fixed stars fade in and the moon takes the sun\'s track. Fog closes in with the light.' },
+};
+
+function showSky(key) {
+  const p = SKY_PRESETS[key];
+  if (current) { scene.remove(current); disposeGroup(current); current = null; }
+  if (!gallerySky) gallerySky = new Sky(scene);
+  skyView = skyStateAt(p.f);
+  ground.scale.setScalar(3);
+  // stand on the survey pad and look around from just above it
+  controls.target.set(0, 2.2, 0);
+  camera.position.set(7, 3.6, 7);
+  camera.near = 0.1; camera.far = 600;
+  camera.updateProjectionMatrix();
+  sun.position.set(Math.cos(skyView.sunAngle) * 30, Math.sin(skyView.sunAngle) * 34, 12);
+  sun.target.position.set(0, 0, 0);
+  const sc = sun.shadow.camera;
+  sc.left = -10; sc.right = 10; sc.top = 10; sc.bottom = -10;
+  sc.near = 0.1; sc.far = 120;
+  sc.updateProjectionMatrix();
+  sun.intensity = Math.max(0.04, skyView.daylight) * 2.0;
+  hemi.intensity = 0.25 + skyView.daylight * 1.2;
+  back.intensity = 0.15 + skyView.daylight * 0.6;
+  fill.intensity = 0.1 + skyView.daylight * 0.45;
+  setCard('ATMOSPHERE RECORD', p.name, p.desc, [
+    ['Day fraction', p.f.toFixed(2)],
+    ['Daylight', skyView.daylight.toFixed(2)],
+    ['Horizon', '#' + skyView.horizon.getHexString()],
+    ['Renderer', 'sky.js — dome + discs + 450 stars'],
+  ]);
+}
+
+function leaveSkyView() {
+  skyView = null;
+  if (gallerySky) gallerySky.setVisible(false);
+  sun.intensity = LIGHTS.sun;
+  back.intensity = LIGHTS.back;
+  fill.intensity = LIGHTS.fill;
+  hemi.intensity = LIGHTS.hemi;
 }
 
 // ---------- category content ----------
@@ -256,6 +355,52 @@ function growTrees(seedStr) {
     [['Trunk height', '4–6 blocks'], ['Canopy', '5×5×3, corners clipped'], ['Drops', 'logs · sticks · fiber']]);
 }
 
+// One InstancedMesh per block id — a few hundred cubes in two or three draws
+function instancedBlocks(id, cells) {
+  const proto = buildBlockMesh(id).children[0];
+  const inst = new THREE.InstancedMesh(proto.geometry, proto.material, cells.length);
+  const m4 = new THREE.Matrix4();
+  cells.forEach((c, i) => { m4.makeTranslation(c[0], c[1] + 0.5, c[2]); inst.setMatrixAt(i, m4); });
+  inst.castShadow = inst.receiveShadow = true;
+  return inst;
+}
+
+function growHill(kind) {
+  const seedStr = $('g-seed').value || 'wake-042';
+  const isIron = kind === 'iron';
+  const { blocks, r, placed } = oreHillShape(seedStr + ':' + kind, isIron);
+  const group = new THREE.Group();
+  const cells = new Map(); // id -> [[x,y,z], ...]
+  const put = (id, c) => { (cells.get(id) || cells.set(id, []).get(id)).push(c); };
+  const padR = r + 3;
+  for (let x = -padR; x <= padR; x++)
+    for (let z = -padR; z <= padR; z++)
+      if (Math.hypot(x, z) <= padR && !blocks.has(x + ',0,' + z)) put(B.GRASS, [x, 0, z]);
+  for (const [k, id] of blocks) {
+    if (id === B.AIR) continue;
+    const [x, y, z] = k.split(',').map(Number);
+    if (y < 0) continue; // the buried part of the deposit stays buried
+    put(id, [x, y, z]);
+  }
+  for (const [id, list] of cells) group.add(instancedBlocks(id, list));
+  // instanced bounds aren't seen by Box3.setFromObject — give it the extents
+  const extent = new THREE.Mesh(new THREE.BoxGeometry(padR * 2 + 1, 9, padR * 2 + 1),
+    new THREE.MeshBasicMaterial({ visible: false }));
+  extent.position.y = 3.5;
+  group.add(extent);
+  showObject(group, { groundScale: 5 });
+  const cfg = WORLDGEN.oreHills;
+  setCard('SURFACE SURVEY', `Wild ore hill — ${isIron ? 'iron' : 'coal'}`,
+    'A walk-in ore dome, stamped by the same generator the wilderness streams in. Ore shows on the flanks, the chamber inside holds the seam, and part of the deposit runs under the floor. Every deposit is finite.',
+    [
+      ['Radius', `${cfg.radiusMin}–${cfg.radiusMax} blocks`],
+      ['Guaranteed ore', `≥ ${cfg.minOre} blocks (this stamp: ${placed})`],
+      ['Flank outcrops', String(cfg.outcrops)],
+      ['Frequency', `~${Math.round(WORLDGEN.wild.hillChance * 100)}% of each ${WORLDGEN.wild.hillCell}×${WORLDGEN.wild.hillCell} wilderness cell`],
+      ['Seed', seedStr],
+    ]);
+}
+
 // ---------- sidebar ----------
 
 function buildCats() {
@@ -294,7 +439,12 @@ function buildList() {
     for (const k of Object.keys(ITEMS))
       list.appendChild(listItem(ITEMS[k].name, ITEMS[k].tool || '', () => select(k), activeKey === k));
   } else if (activeCat === 'trees') {
-    list.appendChild(listItem('Growth preview', 'seeded', () => select('trees'), true));
+    list.appendChild(listItem('Growth preview', 'seeded', () => select('trees'), activeKey === 'trees'));
+    list.appendChild(listItem('Wild ore hill — iron', 'landform', () => select('hill:iron'), activeKey === 'hill:iron'));
+    list.appendChild(listItem('Wild ore hill — coal', 'landform', () => select('hill:coal'), activeKey === 'hill:coal'));
+  } else if (activeCat === 'atmosphere') {
+    for (const [k, p] of Object.entries(SKY_PRESETS))
+      list.appendChild(listItem(p.name, p.sub, () => select(k), activeKey === k));
   }
 }
 
@@ -336,6 +486,7 @@ function selectCat(cat) {
   else if (cat === 'blocks') select(String(B.GRASS));
   else if (cat === 'items') { buildIconGrid(); select(Object.keys(ITEMS)[0]); }
   else if (cat === 'trees') select('trees');
+  else if (cat === 'atmosphere') select('noon');
 }
 
 function select(key) {
@@ -348,16 +499,20 @@ function select(key) {
     const def = itemDef(key);
     setCard('FIELD KIT RECORD', def.name, def.desc || '', itemStats(def));
     buildIconGrid();
-  } else if (activeCat === 'trees') growTrees($('g-seed').value || 'wake-042');
+  } else if (activeCat === 'trees' && key.startsWith('hill:')) growHill(key.slice(5));
+  else if (activeCat === 'trees') growTrees($('g-seed').value || 'wake-042');
+  else if (activeCat === 'atmosphere') showSky(key);
   buildList();
 }
 
-$('g-grow').addEventListener('click', () => select('trees'));
+// GROW / RANDOM / Enter re-roll whatever seeded preview is active
+const regrow = () => select(activeKey && activeKey.startsWith('hill:') ? activeKey : 'trees');
+$('g-grow').addEventListener('click', regrow);
 $('g-random').addEventListener('click', () => {
   $('g-seed').value = 'wake-' + Math.floor(Math.random() * 1e6);
-  select('trees');
+  regrow();
 });
-$('g-seed').addEventListener('keydown', (e) => { if (e.key === 'Enter') select('trees'); });
+$('g-seed').addEventListener('keydown', (e) => { if (e.key === 'Enter') regrow(); });
 
 // ---------- frame loop (worker watchdog keeps hidden tabs rendering) ----------
 
@@ -374,6 +529,26 @@ function frame() {
       animateProp(o, t, { running: currentAnim?.running ?? true, dt, aimYaw: null });
   });
   controls.update();
+  if (skyView) {
+    // the dome, discs and stars ride the camera — keep them glued while orbiting
+    if (gallerySky) gallerySky.update(camera, skyView.sunAngle, skyView.daylight, skyView.horizon);
+  } else {
+    // key over the camera's right shoulder, fill low over the left: with
+    // autorotate this reads as the model turning under a fixed studio rig,
+    // and the camera-facing side is always shaped by light
+    const dx = camera.position.x - controls.target.x;
+    const dz = camera.position.z - controls.target.z;
+    const yaw = Math.atan2(dx, dz);
+    const R = modelR * 2.4;
+    sun.position.set(
+      controls.target.x + Math.sin(yaw + 0.55) * R,
+      controls.target.y + R * 1.15,
+      controls.target.z + Math.cos(yaw + 0.55) * R);
+    fill.position.set(
+      controls.target.x + Math.sin(yaw - 0.95) * R,
+      controls.target.y + R * 0.45,
+      controls.target.z + Math.cos(yaw - 0.95) * R);
+  }
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(frame);

@@ -129,8 +129,15 @@ export const SCENARIOS = {
       give(g, { stone_pick: 1, iron_pick: 1, stone_spear: 1, stone_axe: 1, 'b:38': 10, 'b:12': 16, cooked_meat: 8, fiber: 6 });
       const s = g.world.poi.spawn;
       let x = Math.floor(s.x) + 600, z = Math.floor(s.z) + 220;
-      // land on open ground, not a treetop: nudge off any hashed tree column
-      for (let tries = 0; tries < 40 && g.world.treeAt(x, z); tries++) { x += 2; z += 1; }
+      // land on open ground, not a treetop: canopies reach 2 blocks from the
+      // trunk, so nudge until the whole 5×5 neighborhood is trunk-free
+      const nearTree = (cx, cz) => {
+        for (let dx = -2; dx <= 2; dx++)
+          for (let dz = -2; dz <= 2; dz++)
+            if (g.world.treeAt(cx + dx, cz + dz)) return true;
+        return false;
+      };
+      for (let tries = 0; tries < 60 && nearTree(x, z); tries++) { x += 2; z += 1; }
       // materialize the destination column so the drop lands on real ground
       g.world.ensureChunkData(Math.floor(x / 16), Math.floor(z / 16));
       const y = g.world.skyTop(x, z);

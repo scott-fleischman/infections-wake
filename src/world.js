@@ -91,6 +91,24 @@ export function treeShape(th) {
   return blocks;
 }
 
+// Gallery/dev preview: one wild ore hill stamped onto flat ground (surf = 0),
+// as a Map "x,y,z" -> block id. Runs the same stampOreHill the streamer
+// replays, so the archive shows exactly the landform that generates in-world.
+export function oreHillShape(seedStr, isIron = true) {
+  const rng = new RNG('hill:' + seedStr);
+  const hill = { x: 0, z: 0, r: WORLDGEN.oreHills.radiusMax - 1, surf: 0, isIron };
+  const blocks = new Map();
+  const read = (x, y, z) => {
+    const o = blocks.get(x + ',' + y + ',' + z);
+    if (o !== undefined) return o;
+    return y < 0 ? B.STONE : y === 0 ? B.GRASS : B.AIR;
+  };
+  const write = (x, y, z, id) => blocks.set(x + ',' + y + ',' + z, id);
+  const shaper = new World('gallery-shape');
+  const placed = shaper.stampOreHill(write, read, () => 0, rng, hill);
+  return { blocks, r: hill.r, placed };
+}
+
 export class World {
   constructor(seed) {
     this.seed = seed;
@@ -366,6 +384,12 @@ export class World {
     // h < density(p) implies h < base density, so the result is identical.
     const h = hash01(this.seedNum, 14, x, z);
     if (h >= WORLDGEN.wild.treeDensity) return false;
+    // no trunks within 2 blocks of the story core: core chunks never replay
+    // wilderness stamps, so an overhanging canopy would be silently clipped
+    // at the seam. (The legacy core pass keeps the same margin on its side.)
+    const ddx = x < 0 ? -x : x >= CORE_X ? x - CORE_X + 1 : 0;
+    const ddz = z < 0 ? -z : z >= CORE_Z ? z - CORE_Z + 1 : 0;
+    if (Math.max(ddx, ddz) <= 2) return false;
     const p = this.plainsMixAt(x, z);
     if (h >= WORLDGEN.wild.treeDensity * (1 - p * 0.85)) return false;
     // keep ore-hill mouths and flanks readable — no trunks on the skirt
@@ -450,7 +474,9 @@ export class World {
     const nrng = new RNG(mixSeed(s, 17, cx, cz));
     if (nrng.chance(wild.nestChance)) {
       const x = x0 + nrng.int(2, CHUNK - 3), z = z0 + nrng.int(2, CHUNK - 3);
-      const surf = surfAt(x, z);
+      // beyond-rim columns in partial edge chunks host nothing: surf 0
+      // empties the search range, so no blocks and no nest metadata
+      const surf = this.inWorld(x, z) ? surfAt(x, z) : 0;
       let found = null;
       for (let y = 6; y < surf - 6; y++) {
         if (read(x, y, z) === B.AIR && read(x, y - 1, z) !== B.AIR) { found = y; break; }
@@ -475,6 +501,7 @@ export class World {
         else if (hash01(s, 20, x, z) < 0.012) { item = 'stick'; n = 1 + (hash01(s, 19, x, z) < 0.5 ? 1 : 0); }
         else if (hash01(s, 21, x, z) < 0.006) { item = 'fiber'; n = 1 + Math.floor(hash01(s, 19, x, z) * 3); }
         if (!item) continue;
+        if (!this.inWorld(x, z)) continue; // no scatter on beyond-rim bedrock
         const surf = surfAt(x, z);
         if (surf + 1 <= SEA_LEVEL) continue; // underwater
         const top = this.terrainIdAt(x, surf, z, surf);
@@ -578,7 +605,11 @@ export class World {
           const lx = x - x0, lz = z - z0;
           if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue;
           if (!this.inWorld(x, z)) continue;
-          data[(y * CHUNK + lz) * CHUNK + lx] = id;
+          const li = (y * CHUNK + lz) * CHUNK + lx;
+          // canopies from one stamp never eat a neighbor stamp's trunk
+          // (matches the in-stamp rule: leaves fill air, logs always win)
+          if (id === B.LEAVES && data[li] === B.LOG) continue;
+          data[li] = id;
         }
         if (ocx === cx && ocz === cz) chunk.meta = stamp;
       }

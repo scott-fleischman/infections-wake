@@ -28,6 +28,16 @@ export class Signature {
           const def = BLOCKS[id];
           if (def && def.emits) this.addStaticBlock(x, y, z, def);
         }
+    // Wilderness chunks already resident must be re-registered here: chunks
+    // streamed in during applyEdits are pinned and never re-stream, so the
+    // onChunkAdded hook will not fire for them again — and by now applyEdits
+    // has baked saved edits into chunk.data, so this pass also picks up
+    // player-placed emitters (campfires, torches) the pre-edit scan missed.
+    const w = this.game.world;
+    if (w.chunks && w.isCoreChunk) {
+      for (const chunk of w.chunks.values())
+        if (!w.isCoreChunk(chunk.cx, chunk.cz)) this.scanChunk(chunk);
+    }
   }
 
   // Register every emitting block in a freshly streamed-in chunk (nests,

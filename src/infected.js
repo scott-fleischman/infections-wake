@@ -97,6 +97,12 @@ export class Infected {
   }
 
   update(dt) {
+    // A body standing in a not-yet-streamed chunk sees only BEDROCK stand-ins
+    // through get() — groundY would ratchet it to the world ceiling. Freeze
+    // until its ground exists (saves can restore far-off hosts before the
+    // stream catches up); the distance despawn handles the truly abandoned.
+    if (this.game.world.generated
+        && !this.game.world.hasDataAt(Math.floor(this.pos.x), Math.floor(this.pos.z))) return;
     this._dt = dt;
     this.attackCd = Math.max(0, this.attackCd - dt);
     this.retarget -= dt;
@@ -464,7 +470,11 @@ export class InfectedManager {
     if (this.game.world?.generated) {
       const p = this.game.player.pos;
       for (const inf of this.list) {
-        if (inf.dead || inf.isFalse || inf.s.boss || inf.home) continue;
+        // Active-assault members are exempt: a despawn is indistinguishable
+        // from a kill in the director's bookkeeping, so culling them would
+        // let the player "win" sieges (and the transit finale) by running.
+        if (inf.dead || inf.isFalse || inf.s.boss || inf.home
+            || (inf.fromAssault && this.game.director?.assaultActive)) continue;
         const d = Math.max(Math.abs(inf.pos.x - p.x), Math.abs(inf.pos.z - p.z));
         if (d > 140) inf.remove();
       }

@@ -361,3 +361,21 @@ valley stays at 0..192 and never unloads; deterministic wilderness (terrain,
 caves, forests, nests, finite ore hills) generates chunk-by-chunk around the
 player in every direction, out to a containment rim of mountains at the edge
 of the region.
+
+## 24. Graphics Audit (Verbal Feedback, August 2026)
+
+> When you look at the graphics improvements, does the graphics pass and
+> viewer show all of the changes? Look through them and make sure they
+> really look amazing; improve them as needed.
+
+Audit findings and response: the model archive was missing the texture
+atlas entirely (flat-color material cubes), rendered without the game's
+tone mapping or shadows, and had no entry for the sky or the wild ore
+hills. Display cubes now sample the same atlas the terrain mesher uses,
+the viewer renders with ACES + PCF soft shadows under a camera-tracking
+studio rig, and two new archive sections were added: ATMOSPHERE (the
+game's sky dome at dawn/noon/dusk/night) and wild ore-hill landform
+surveys stamped by the real wilderness generator. In-game, fog was made
+radial so the streamed-terrain frontier stays hidden at the screen edges,
+distant pickups shrink out instead of popping, and ore-block drops carry
+their textures.

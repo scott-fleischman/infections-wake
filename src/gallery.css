@@ -91,7 +91,13 @@ body {
 
 /* ---------- main ---------- */
 #g-main { grid-area: main; position: relative; min-width: 0; min-height: 0; }
-#g-viewport { position: absolute; inset: 0; }
+#g-viewport {
+  position: absolute; inset: 0;
+  /* studio backdrop: a faint key-side glow so dark models never sit on void */
+  background:
+    radial-gradient(120% 90% at 52% 36%, rgba(46, 62, 50, 0.5), rgba(10, 14, 11, 0) 58%),
+    radial-gradient(140% 120% at 50% 60%, #0d1511 0%, #05080a 75%);
+}
 #g-viewport canvas { display: block; }
 
 #g-scan {
