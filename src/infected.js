@@ -429,7 +429,9 @@ export class InfectedManager {
       const r = minR + Math.random() * (maxR - minR);
       const x = Math.floor(p.pos.x + Math.cos(ang) * r);
       const z = Math.floor(p.pos.z + Math.sin(ang) * r);
-      if (x < 1 || x >= WORLD.SIZE_X - 1 || z < 1 || z >= WORLD.SIZE_Z - 1) continue;
+      // spawn only on streamed-in ground (the ring sits well inside the
+      // generation radius, so this only rejects the world's rim)
+      if (!this.game.world.hasDataAt(x, z) || !this.game.world.hasDataAt(x - 1, z - 1) || !this.game.world.hasDataAt(x + 1, z + 1)) continue;
       const top = this.game.world.skyTop(x, z); // open to sky here
       const groundId = this.game.world.get(x, top - 1, z);
       const gd = BLOCKS[groundId];
@@ -454,6 +456,19 @@ export class InfectedManager {
   }
 
   update(dt) {
+    // Distance despawn (streamed worlds only): a body left 140+ blocks
+    // behind stops mattering — it can never re-find the player, and without
+    // this a long trek would drag an ever-growing train of seam-pinned
+    // wanderers. Bosses and story hosts keep their posts; hallucinations
+    // dissolve on their own timers. Bare test worlds never despawn.
+    if (this.game.world?.generated) {
+      const p = this.game.player.pos;
+      for (const inf of this.list) {
+        if (inf.dead || inf.isFalse || inf.s.boss || inf.home) continue;
+        const d = Math.max(Math.abs(inf.pos.x - p.x), Math.abs(inf.pos.z - p.z));
+        if (d > 140) inf.remove();
+      }
+    }
     for (const inf of this.list) if (!inf.dead) inf.update(dt);
     this.list = this.list.filter(i => !i.dead);
   }

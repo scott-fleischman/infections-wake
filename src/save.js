@@ -8,7 +8,7 @@ const KEY = 'infections-wake-save-v1';
 const SHADOW_KEY = 'infections-wake-save-shadow';
 const FAILED_KEY = 'infections-wake-failed-v1';
 const OLD_WORLD_KEY = 'infections-wake-save-oldworld';
-const VERSION = 3;
+const VERSION = 4;
 
 export const SaveStore = {
   // A save "exists" only if it is loadable — read() archives incompatible
@@ -21,9 +21,9 @@ export const SaveStore = {
       const data = {
         version: VERSION,
         savedAt: Date.now(),
-        // world identity: terrain regenerates from seed at these dims, so a
-        // save is only valid for the size (and day length) it was written at
-        world: { sx: WORLD.SIZE_X, sz: WORLD.SIZE_Z, h: WORLD.HEIGHT },
+        // world identity: terrain regenerates from seed under this worldgen
+        // scheme, so a save is only valid for the scheme it was written at
+        world: { mode: 'stream1', core: WORLD.CORE_X, span: WORLD.HALF_SPAN, h: WORLD.HEIGHT },
         dayLen: TIME.DAY_LENGTH,
         seed: game.seed,
         hardcore: game.recovery.hardcore,
@@ -46,7 +46,10 @@ export const SaveStore = {
         lastSleepDay: game.lastSleepDay,
         radioHeard: game.radioHeard,
         docTaken: [...game.docTaken],
-        minesSeen: [...game.minesSeen],
+        // keyed by deposit id and carrying coordinates, so discovered mines
+        // stay on the map even when their chunk is unloaded
+        minesSeen: [...game.minesSeen.entries()].map(([k, m]) => ({ k, x: m.x, z: m.z, kind: m.kind })),
+        wildTaken: [...game.wildTaken],
         craftGrid: game.craftGrid,
         chests: [...game.chests.entries()].map(([k, c]) => {
           const [x, y, z] = k.split(',').map(Number);
@@ -68,7 +71,7 @@ export const SaveStore = {
         recovery: game.recovery.serialize(),
         infected: game.infected.serialize(),
         pickupsTaken: [...game.pickupsTaken],
-        dropped: game.pickups.filter(p => p.idx === -1)
+        dropped: game.pickups.filter(p => p.idx === -1 && !p.wildKey)
           .map(p => ({ x: p.x, y: p.y, z: p.z, item: p.item, n: p.n })),
       };
       // shadow write → verify parse → promote. A quota/JSON failure here
@@ -97,11 +100,12 @@ export const SaveStore = {
         data.bossState = { kiln: {}, pump: {} };
         data.version = 2;
       }
-      // v3: saves carry world dims. A save written at different dims would
-      // replay its edit diffs onto different terrain — archive it untouched
-      // rather than corrupt it (the menu then offers a fresh world).
+      // v4: saves carry the worldgen scheme. A save written under a different
+      // scheme (including every fixed-size v3 world) would replay its edit
+      // diffs onto different terrain — archive it untouched rather than
+      // corrupt it (the menu then offers a fresh world).
       const w = data.world;
-      if (!w || w.sx !== WORLD.SIZE_X || w.sz !== WORLD.SIZE_Z || w.h !== WORLD.HEIGHT) {
+      if (!w || w.mode !== 'stream1' || w.core !== WORLD.CORE_X || w.span !== WORLD.HALF_SPAN || w.h !== WORLD.HEIGHT) {
         console.warn('Save from an older world version — archived, starting fresh worlds from now on.');
         localStorage.setItem(OLD_WORLD_KEY, raw);
         localStorage.removeItem(KEY);

@@ -37,7 +37,7 @@ class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     $('app').appendChild(this.renderer.domElement);
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 320);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 280);
     this.sun = new THREE.DirectionalLight(0xffe8c0, 1.0);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -49,7 +49,9 @@ class Game {
     this.sun.shadow.normalBias = 0.05;
     this.hemi = new THREE.HemisphereLight(0xbdd3e8, 0x3a3428, 0.9);
     this.scene.add(this.sun, this.sun.target, this.hemi);
-    this.scene.fog = new THREE.Fog(0x9db4c8, 40, 190);
+    // fog far sits just inside the streamed mesh radius (7 chunks = 112
+    // blocks) so the edge of loaded terrain is always hidden in haze
+    this.scene.fog = new THREE.Fog(0x9db4c8, 40, 106);
     this.sky = new Sky(this.scene);
 
     this.audio = new GameAudio();
@@ -147,6 +149,9 @@ class Game {
     this.furnaces = new Map();
     this.blockHp = new Map();
     this._sleeping = false;
+    this._pickupsReady = false;
+    this.pickups = [];
+    this._wildActive = new Set(); // wildKeys with a live entity in the scene
     this.hud.showAssaultBanner(false);
     $('night-fade').style.opacity = '0';
 
@@ -155,6 +160,10 @@ class Game {
     this.world = new World(seed);
     this.world.generate();
     this.scene.add(this.world.group);
+    // streamed-chunk lifecycle: register/remove wilderness signature emitters
+    // and ground-scatter pickups as chunks come and go around the player
+    this.world.onChunkAdded = (chunk) => this.onChunkStreamedIn(chunk);
+    this.world.onChunkEvicted = (chunk) => this.onChunkStreamedOut(chunk);
 
     this.player = new Player(this);
     this.inv = new Inventory(this);
@@ -189,7 +198,8 @@ class Game {
     this.lastSleepDay = 1;
     this.radioHeard = [];      // ordered broadcast keys (latest replays at the set)
     this.docTaken = new Set(); // archive ids whose physical copy was pocketed
-    this.minesSeen = new Set(); // ore-hill indices discovered on foot
+    this.minesSeen = new Map(); // deposit key -> {x,z,kind}, discovered on foot
+    this.wildTaken = new Set(); // collected wilderness ground-scatter, by "x,z"
     this.craftGrid = new Array(9).fill(null); // 3x3 grid-crafting cells {id,n}
     this.chests = new Map();   // "x,y,z" -> { items: [{id,n}] }
     this.trapWear = new Map();
@@ -244,7 +254,7 @@ class Game {
       }
       c.live = live;
     }
-    this.world.buildAll();
+    this.world.buildAll(this.player.pos.x, this.player.pos.z);
 
     this.state = 'play';
     this.hud.closeAll();
@@ -258,7 +268,9 @@ class Game {
     this.audio.ensure(); this.audio.resume();
 
     if (!data && scenario && applyScenario(this, scenario)) {
-      // scenario worlds get their own toast; skip the newcomer intro
+      // scenario worlds get their own toast; skip the newcomer intro.
+      // scenarios teleport — build the meshes around the destination now
+      this.world.buildAll(this.player.pos.x, this.player.pos.z);
     } else if (!data) {
       this.toast("The valley is quiet. Gather loose stones and sticks.", 'important');
       setTimeout(() => this.toast('Craft tools with [E]. Night comes — and something forecasts with it.'), 4500);
@@ -292,7 +304,11 @@ class Game {
     this.lastSleepDay = d.lastSleepDay ?? this.day;
     this.radioHeard = d.radioHeard || [];
     this.docTaken = new Set(d.docTaken || []);
-    this.minesSeen = new Set(d.minesSeen || []);
+    this.minesSeen = new Map();
+    for (const m of (d.minesSeen || [])) {
+      if (m && m.k != null) this.minesSeen.set(m.k, { x: m.x, z: m.z, kind: m.kind });
+    }
+    this.wildTaken = new Set(d.wildTaken || []);
     if (Array.isArray(d.craftGrid)) {
       for (let i = 0; i < 9; i++) this.craftGrid[i] = d.craftGrid[i] || null;
     }
@@ -393,6 +409,75 @@ class Game {
       this.scene.add(mesh);
       this.pickups.push({ ...p, mesh, idx: i, bob: Math.random() * 6, grounded });
     });
+    // wilderness scatter for chunks already resident (saved-edit chunks
+    // regenerate during load, before this list exists) — then live adds flow
+    // through onChunkStreamedIn
+    this._pickupsReady = true;
+    for (const chunk of this.world.chunks.values()) {
+      if (chunk.meta) this.spawnWildPickupsFor(chunk);
+    }
+  }
+
+  // ---------------- streamed-chunk lifecycle ----------------
+  onChunkStreamedIn(chunk) {
+    this.sig?.scanChunk(chunk);
+    if (this._pickupsReady && chunk.meta) this.spawnWildPickupsFor(chunk);
+  }
+
+  onChunkStreamedOut(chunk) {
+    this.sig?.unscanChunk(chunk);
+    // un-collected wilderness scatter leaves with its chunk (it respawns
+    // deterministically when the chunk regenerates)
+    const { CHUNK } = WORLD;
+    let removed = false;
+    for (const pk of this.pickups) {
+      if (!pk.wildKey) continue;
+      if (Math.floor(pk.x / CHUNK) !== chunk.cx || Math.floor(pk.z / CHUNK) !== chunk.cz) continue;
+      this.scene.remove(pk.mesh);
+      disposeGroup(pk.mesh);
+      this._wildActive.delete(pk.wildKey);
+      pk.evicted = true;
+      removed = true;
+    }
+    if (removed) this.pickups = this.pickups.filter(pk => !pk.evicted);
+  }
+
+  spawnWildPickupsFor(chunk) {
+    for (const p of chunk.meta.pickups) {
+      if (this.wildTaken.has(p.key) || this._wildActive.has(p.key)) continue;
+      const mesh = this.pickupMesh(p.item, p.key.length);
+      const grounded = !!mesh.userData.grounded;
+      mesh.position.set(p.x, p.y, p.z);
+      if (grounded) mesh.rotation.y = ((p.x * 7 + p.z * 13) % 6.28);
+      this.scene.add(mesh);
+      this._wildActive.add(p.key);
+      this.pickups.push({ ...p, mesh, idx: -1, wildKey: p.key, bob: Math.random() * 6, grounded });
+    }
+  }
+
+  // Scatter entities live only near the player: far ones are despawned (their
+  // chunk keeps the metadata, so walking back re-materializes anything
+  // uncollected). Bounded entity count however far the trek goes.
+  sweepWildPickups() {
+    const p = this.player.pos;
+    let removed = false;
+    for (const pk of this.pickups) {
+      if (!pk.wildKey) continue;
+      if (Math.max(Math.abs(pk.x - p.x), Math.abs(pk.z - p.z)) > 150) {
+        this.scene.remove(pk.mesh);
+        disposeGroup(pk.mesh);
+        this._wildActive.delete(pk.wildKey);
+        pk.evicted = true;
+        removed = true;
+      }
+    }
+    if (removed) this.pickups = this.pickups.filter(pk => !pk.evicted);
+    const [pcx, pcz] = this.world.chunkOf(p.x, p.z);
+    for (const chunk of this.world.chunks.values()) {
+      if (!chunk.meta || !chunk.meta.pickups.length) continue;
+      if (Math.max(Math.abs(chunk.cx - pcx), Math.abs(chunk.cz - pcz)) > 8) continue;
+      this.spawnWildPickupsFor(chunk);
+    }
   }
 
   dropItemAt(pos, id, n = 1) {
@@ -412,9 +497,14 @@ class Game {
   spawnCritters() {
     this.critters = [];
     const rng = this.rng.fork('critters');
+    const s = this.world.poi.spawn;
     for (let i = 0; i < 10; i++) {
-      const x = rng.range(8, WORLD.SIZE_X * 0.55);
-      const z = rng.range(8, WORLD.SIZE_Z - 8);
+      // scattered around the refuge; the leash in updateCritters keeps the
+      // little herd migrating along with the player afterwards
+      const ang = rng.range(0, Math.PI * 2);
+      const r = rng.range(14, 60);
+      const x = s.x + Math.cos(ang) * r;
+      const z = s.z + Math.sin(ang) * r;
       const y = this.world.skyTop(Math.floor(x), Math.floor(z));
       const grp = new THREE.Group();
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.7), new THREE.MeshLambertMaterial({ color: 0x9a8a72 }));
@@ -921,7 +1011,11 @@ class Game {
     }
     const d = this.world.poi.deep;
     const t = this.world.poi.transit;
-    const inDeep = this.player.pos.y < d.top + 2 && this.player.pos.x >= d.x0 - 2;
+    const p = this.player.pos;
+    // full box test: with a whole wilderness of caves out there, "deep and
+    // east of x=76" is no longer a safe definition of being in the Deep Site
+    const inDeep = p.y < d.top + 2 && p.x >= d.x0 - 2 && p.x <= d.x1 + 2
+      && p.z >= d.z0 - 2 && p.z <= d.z1 + 2;
     const dest = inDeep
       ? { x: t.gate.x + 0.5, y: t.gate.y, z: t.gate.z + 1.5 }
       : { x: d.entry.x + 0.5, y: d.entry.y + 0.02, z: d.entry.z + 0.5 };
@@ -1012,7 +1106,8 @@ class Game {
     // exposed colony tissue chars; infected in the complex take a beating
     for (const inf of this.infected.list) {
       if (inf.isFalse || inf.dead) continue;
-      if (inf.pos.y < d.top + 2 && inf.pos.x >= d.x0 - 2 && inf.pos.x <= d.x1 + 2) inf.takeHit(inf.hp * 0.6, true);
+      if (inf.pos.y < d.top + 2 && inf.pos.x >= d.x0 - 2 && inf.pos.x <= d.x1 + 2
+        && inf.pos.z >= d.z0 - 2 && inf.pos.z <= d.z1 + 2) inf.takeHit(inf.hp * 0.6, true);
     }
     // §18.3 valve two: unshielded RUNNING electronics corrode — machines the
     // player powered down in time are spared
@@ -1023,7 +1118,8 @@ class Game {
       m.sterilizedT = DEEP.sterilantMachineDisableSec;
       fried++;
     }
-    if (this.player.pos.y < d.top + 2 && this.player.pos.x >= d.x0 - 2) {
+    if (this.player.pos.y < d.top + 2 && this.player.pos.x >= d.x0 - 2 && this.player.pos.x <= d.x1 + 2
+      && this.player.pos.z >= d.z0 - 2 && this.player.pos.z <= d.z1 + 2) {
       this.player.damage(8, 'sterilant burn');
       this.sanity.addSuppressant(-4);
     }
@@ -1740,13 +1836,15 @@ class Game {
     if (near(poi.colony.x, poi.colony.z, 10) && Math.abs(poi.colony.y - p.y) < 6) this.survey('colony', 'colony seam');
     for (const r of poi.reservoirs || []) if (near(r.x, r.z, 8)) this.survey(r.id, 'secondary reservoir');
     // ore hills go on the map once walked up to (no valley score — they're
-    // resources, not recovery)
-    (poi.mines || []).forEach((m, i) => {
-      if (!this.minesSeen.has(i) && near(m.x, m.z, 13)) {
-        this.minesSeen.add(i);
+    // resources, not recovery). poi.mines lists core hills plus whichever
+    // wilderness hills are currently resident; discovery is keyed + carries
+    // coordinates so the marker outlives the chunk.
+    for (const m of (poi.mines || [])) {
+      if (!this.minesSeen.has(m.key) && near(m.x, m.z, 13)) {
+        this.minesSeen.set(m.key, { x: m.x, z: m.z, kind: m.kind });
         this.toast(`${m.kind === 'iron' ? 'Iron' : 'Coal'} deposit — marked on your map [M].`, 'important');
       }
-    });
+    }
   }
 
   setMineOverlay(hit, progress = 0) {
@@ -1841,9 +1939,10 @@ class Game {
       this.sky.setVisible(false);
       if (this.scene.background) this.scene.background = null;
     }
-    // subtle night fear: fog closes in
-    this.scene.fog.near = 30 + dl * 25;
-    this.scene.fog.far = 110 + dl * 110;
+    // subtle night fear: fog closes in (day far stays inside the 112-block
+    // streamed mesh radius so unloaded terrain never shows)
+    this.scene.fog.near = 24 + dl * 22;
+    this.scene.fog.far = 84 + dl * 22;
   }
 
   onNewDay() {
@@ -1863,7 +1962,14 @@ class Game {
     this._lastFrameAt = performance.now();
     const dt = Math.min(0.05, this.clock.getDelta());
     if (this.state === 'play') this.update(dt);
-    if (this.world) this.world.flushDirty(8);
+    if (this.world && this.player && this.state !== 'menu') {
+      // one shared streaming budget: if generation ran long this frame,
+      // meshing waits for the next one rather than stacking a double hitch
+      const t0 = performance.now();
+      this.world.updateStreaming(this.player.pos.x, this.player.pos.z);
+      const left = 11 - (performance.now() - t0);
+      if (left > 2) this.world.flushDirty(left);
+    }
     this.lights.update(this.camera.position);
     this.renderer.render(this.scene, this.camera);
   }
@@ -1891,6 +1997,8 @@ class Game {
     this.sanity.update(dt);
     this.recovery.update(dt);
     this.updatePickups(dt);
+    this._wildSweepT = (this._wildSweepT ?? 2) - dt;
+    if (this._wildSweepT <= 0) { this._wildSweepT = 2; this.sweepWildPickups(); }
     this.updateCritters(dt);
     this.updateEffects(dt);
     this.updateProjectiles(dt);
@@ -2038,6 +2146,10 @@ class Game {
         pk.mesh.rotation.y += dt;
       }
       const d = Math.hypot(pk.x - p.x, pk.y - (p.y + 0.8), pk.z - p.z);
+      // scatter is invisible at range anyway — culling it keeps the draw
+      // count flat however many chunks are resident
+      const vis = d < 64;
+      if (pk.mesh.visible !== vis) pk.mesh.visible = vis;
       if (d < 2.0) { // magnet
         pk.grounded = false;
         pk.x += (p.x - pk.x) * 6 * dt;
@@ -2052,6 +2164,7 @@ class Game {
         if (overflow === 0) {
           pk.taken = true;
           if (pk.idx >= 0) this.pickupsTaken.add(pk.idx);
+          if (pk.wildKey) { this.wildTaken.add(pk.wildKey); this._wildActive.delete(pk.wildKey); }
           if (pk.sigKey) this.sig.removeDynamic(pk.sigKey);
           this.scene.remove(pk.mesh);
           disposeGroup(pk.mesh);
@@ -2066,13 +2179,22 @@ class Game {
     for (const c of this.critters) {
       c.moveT -= dt;
       const dp = Math.hypot(c.pos.x - p.x, c.pos.z - p.z);
+      // leash: game left far behind quietly rejoins the player's surroundings
+      // (there is always warm wildlife nearby, wherever the trek has reached)
+      if (dp > 90) {
+        const ang = Math.random() * Math.PI * 2, r = 35 + Math.random() * 25;
+        const nx = p.x + Math.cos(ang) * r, nz = p.z + Math.sin(ang) * r;
+        if (this.world.hasDataAt(Math.floor(nx), Math.floor(nz))) {
+          c.pos.set(nx, this.world.skyTop(Math.floor(nx), Math.floor(nz)), nz);
+        }
+      }
       if (dp < 7) { c.fleeing = 2; c.dir = Math.atan2(c.pos.x - p.x, c.pos.z - p.z); }
       if (c.fleeing > 0) c.fleeing -= dt;
       if (c.moveT <= 0) { c.moveT = 1 + Math.random() * 3; c.dir = Math.random() * Math.PI * 2; }
       const speed = c.fleeing > 0 ? 4.5 : 0.8;
       const nx = c.pos.x + Math.sin(c.dir) * speed * dt;
       const nz = c.pos.z + Math.cos(c.dir) * speed * dt;
-      if (nx > 1 && nx < WORLD.SIZE_X - 1 && nz > 1 && nz < WORLD.SIZE_Z - 1) {
+      if (this.world.hasDataAt(Math.floor(nx), Math.floor(nz))) {
         const gy = this.world.skyTop(Math.floor(nx), Math.floor(nz));
         if (Math.abs(gy - c.pos.y) < 1.6) { c.pos.x = nx; c.pos.z = nz; c.pos.y = gy; }
         else c.dir += Math.PI / 2;

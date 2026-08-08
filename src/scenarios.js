@@ -121,6 +121,24 @@ export const SCENARIOS = {
       setTime(g, 2, 0.3);
     },
   },
+  frontier: {
+    name: 'Day 2 — the frontier',
+    desc: 'Dropped 600 blocks beyond the valley, in streamed wilderness. Ore hills, nests, and forests continue in every direction — so does the way home.',
+    apply(g) {
+      sealShack(g);
+      give(g, { stone_pick: 1, iron_pick: 1, stone_spear: 1, stone_axe: 1, 'b:38': 10, 'b:12': 16, cooked_meat: 8, fiber: 6 });
+      const s = g.world.poi.spawn;
+      let x = Math.floor(s.x) + 600, z = Math.floor(s.z) + 220;
+      // land on open ground, not a treetop: nudge off any hashed tree column
+      for (let tries = 0; tries < 40 && g.world.treeAt(x, z); tries++) { x += 2; z += 1; }
+      // materialize the destination column so the drop lands on real ground
+      g.world.ensureChunkData(Math.floor(x / 16), Math.floor(z / 16));
+      const y = g.world.skyTop(x, z);
+      g.player.pos.set(x + 0.5, y + 0.02, z + 0.5);
+      g.player.vel.set(0, 0, 0);
+      setTime(g, 2, 0.32);
+    },
+  },
   ironage: {
     name: 'Day 2 — iron age',
     desc: 'Furnace running, iron tools in hand, the power tier within reach.',

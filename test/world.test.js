@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { World } from '../src/world.js';
 import { WORLD, B } from '../src/config.js';
-import { hashU16 } from './helpers.js';
+import { hashWorld, countBlocks } from './helpers.js';
 
 function generated(seed = 'test-seed') {
   const w = new World(seed);
@@ -18,8 +18,8 @@ const w = generated();
 
 test('same seed generates byte-identical block data', () => {
   const w2 = generated();
-  assert.equal(w.data.length, w2.data.length);
-  assert.equal(hashU16(w.data), hashU16(w2.data));
+  assert.equal(w.chunks.size, w2.chunks.size);
+  assert.equal(hashWorld(w), hashWorld(w2));
 });
 
 test('POIs exist and are in bounds', () => {
@@ -32,10 +32,7 @@ test('POIs exist and are in bounds', () => {
 });
 
 test('each archive block appears exactly once', () => {
-  const counts = { [B.ARCHIVE_1]: 0, [B.ARCHIVE_2]: 0, [B.ARCHIVE_3]: 0 };
-  for (let i = 0; i < w.data.length; i++) {
-    if (w.data[i] in counts) counts[w.data[i]]++;
-  }
+  const counts = countBlocks(w, [B.ARCHIVE_1, B.ARCHIVE_2, B.ARCHIVE_3]);
   assert.equal(counts[B.ARCHIVE_1], 1, 'ARCHIVE_1 count');
   assert.equal(counts[B.ARCHIVE_2], 1, 'ARCHIVE_2 count');
   assert.equal(counts[B.ARCHIVE_3], 1, 'ARCHIVE_3 count');
@@ -80,7 +77,7 @@ test('serializeEdits/applyEdits round-trips edits onto a fresh same-seed world',
     assert.equal(b.get(x, y, z), id, `edited cell ${x},${y},${z}`);
   }
   // full grids now agree byte-for-byte
-  assert.equal(hashU16(a.data), hashU16(b.data));
+  assert.equal(hashWorld(a), hashWorld(b));
 });
 
 test('set() tracks edits and re-serializes the same diff', () => {
@@ -92,9 +89,15 @@ test('set() tracks edits and re-serializes the same diff', () => {
   assert.deepEqual(arr[0], [10, 45, 10, B.AIR]);
 });
 
-test('get() outside the grid returns containing walls', () => {
-  assert.equal(w.get(-1, 10, 0), B.BEDROCK);
-  assert.equal(w.get(0, -1, 0), B.BEDROCK);
-  assert.equal(w.get(0, WORLD.HEIGHT, 0), B.AIR);
-  assert.equal(w.get(WORLD.SIZE_X, 10, 0), B.BEDROCK);
+test('the get() contract: vertical caps, unstreamed chunks, and the rim', () => {
+  assert.equal(w.get(0, -1, 0), B.BEDROCK, 'below the world is bedrock');
+  assert.equal(w.get(0, WORLD.HEIGHT, 0), B.AIR, 'above the world is air');
+  // un-streamed wilderness reads as solid (nothing falls through), until
+  // the chunk generates and becomes real terrain
+  assert.equal(w.get(-1, 10, 0), B.BEDROCK, 'unstreamed chunk reads solid');
+  w.ensureChunkData(-1, 0);
+  assert.notEqual(w.get(-8, w.surfOf(-8, 8), 8), B.BEDROCK, 'streamed-in wilderness is real terrain');
+  // beyond the containment rim is bedrock forever, resident chunk or not
+  const beyond = WORLD.CENTER_X + WORLD.HALF_SPAN + 1;
+  assert.equal(w.get(beyond, 10, 0), B.BEDROCK, 'beyond the rim is walled');
 });

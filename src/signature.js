@@ -15,16 +15,40 @@ export class Signature {
 
   key(x, y, z) { return `${x},${y},${z}`; }
 
-  // Scan the generated world once for blocks that emit signatures.
+  // Scan the resident story core once for blocks that emit signatures.
+  // Streamed wilderness chunks register/unregister via scanChunk/unscanChunk
+  // as they come and go around the player.
   scanWorld() {
     this.staticEm.clear();
-    const { SIZE_X, SIZE_Z, HEIGHT } = WORLD;
-    for (let x = 0; x < SIZE_X; x++)
-      for (let z = 0; z < SIZE_Z; z++)
+    const { CORE_X, CORE_Z, HEIGHT } = WORLD;
+    for (let x = 0; x < CORE_X; x++)
+      for (let z = 0; z < CORE_Z; z++)
         for (let y = 0; y < HEIGHT; y++) {
           const id = this.game.world.get(x, y, z);
           const def = BLOCKS[id];
           if (def && def.emits) this.addStaticBlock(x, y, z, def);
+        }
+  }
+
+  // Register every emitting block in a freshly streamed-in chunk (nests,
+  // cyst film). Chunk objects carry their own data, so this also works for
+  // unscan after the chunk left the world map.
+  scanChunk(chunk) {
+    this._eachEmitter(chunk, (x, y, z, def) => this.addStaticBlock(x, y, z, def));
+  }
+  unscanChunk(chunk) {
+    this._eachEmitter(chunk, (x, y, z) => this.removeStaticBlock(x, y, z));
+  }
+  _eachEmitter(chunk, fn) {
+    const { CHUNK, HEIGHT } = WORLD;
+    const x0 = chunk.cx * CHUNK, z0 = chunk.cz * CHUNK;
+    for (let lx = 0; lx < CHUNK; lx++)
+      for (let lz = 0; lz < CHUNK; lz++)
+        for (let y = 0; y < HEIGHT; y++) {
+          const id = chunk.data[(y * CHUNK + lz) * CHUNK + lx];
+          if (id === 0) continue;
+          const def = BLOCKS[id];
+          if (def && def.emits) fn(x0 + lx, y, z0 + lz, def);
         }
   }
 

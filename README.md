@@ -12,16 +12,20 @@ line, survive its startup siege, descend into the Lazarus Deep Site, open the
 three purge galleries, and silence the reservoir — then keep playing into the
 reclamation endgame at a fixed maximum enemy tier.
 
-**Latest build** (the wishlist update): a 192×192 valley with walk-in **ore
-hills** (visible, finite, Factorio-style deposits), 30-minute days in two
-15-minute halves, melee **knockback** both ways, a hard new rule that **only
-machine eaters break blocks — and only machine blocks** (your walls and doors
-are safe; burrowers still push through loose soil), Vintage-Story-style
-**click-to-move inventory**, **3×3 grid crafting** with hand-authored patterns
-for every recipe, a searchable **Handbook `[H]`** that draws each recipe as its
-grid pattern and can auto-arrange materials, procedurally **textured blocks**
-(runtime canvas atlas — still zero image assets), and a graphics pass: sun
-shadows, ACES tone mapping, gradient sky with sun, moon, and stars.
+**Latest build** (the huge-world update): the valley now sits inside a
+**16,384×16,384-block streamed world** — walk in any direction and new
+forests, lakes, caves, infected nests, and finite walk-in **ore hills**
+generate around you, chunk by chunk, out to a containment rim of mountains at
+the edge of the region. The hand-authored story valley (0..192) is generated
+whole and never unloads, so every campaign site behaves exactly as before;
+the wilderness is deterministic per seed (leave and return — same hills, same
+trees) and saves stay tiny (seed + your edits). Everything from the wishlist
+update is still here: 30-minute days in two 15-minute halves, melee
+**knockback** both ways, **only machine eaters break blocks — and only
+machine blocks**, Vintage-Story-style **click-to-move inventory**, **3×3 grid
+crafting**, the searchable **Handbook `[H]`**, procedurally **textured
+blocks**, sun shadows, ACES tone mapping, and the gradient sky with sun,
+moon, and stars.
 
 ## Run it
 
@@ -57,7 +61,7 @@ the original project input in the browser (no innerHTML — a small markdown
 renderer in `src/markdown.js`), with a PLAY NOW link back to the game.
 
 **Dev scenarios:** the start menu's DEV SCENARIOS strip (or
-`?scenario=<tooled|miner|fortified|ironage|powered|lab|boss|steel|transit|deepsite|endgame>[&seed=…]`)
+`?scenario=<tooled|miner|fortified|frontier|ironage|powered|lab|boss|steel|transit|deepsite|endgame>[&seed=…]`)
 jumps to a story checkpoint with a matching world — tools granted, machines
 placed and fueled, campaign flags set, player teleported. Scenario links never
 overwrite a real save; that takes an explicit menu click.
@@ -135,7 +139,7 @@ Systems map 1:1 onto the spec's module list (§23):
 | --- | --- |
 | `src/config.js` | All data-driven tunables: blocks, items, recipes (with grid patterns), machines, strain sense profiles, threat compositions (§22) |
 | `src/crafting.js` | Grid-crafting matcher: translation-invariant pattern matching + consumption (pure, headless-tested) |
-| `src/world.js` | Chunked voxel world, generation (incl. ore hills), meshing with AO + sky-light shading + texture-atlas UVs |
+| `src/world.js` | Streamed chunk world: pinned story core + deterministic position-hashed wilderness (terrain, caves, veins, trees, nests, ore hills), budgeted per-frame gen/mesh/evict, meshing with AO + sky-light shading + texture-atlas UVs |
 | `src/textures.js` | Runtime canvas texture atlas — neutral-luminance tiles multiplied over the vertex-color light bake |
 | `src/sky.js` | Sky dome, sun/moon discs, starfield |
 | `src/models.js` | Model registry: machine props, infected bodies, block display meshes — shared by game + gallery |
@@ -165,7 +169,7 @@ presentation only, never simulation state.
 
 ## Testing
 
-`npm test` runs 160+ headless tests (Node's built-in runner, no browser):
+`npm test` runs 170+ headless tests (Node's built-in runner, no browser):
 movement math, worldgen determinism and structure placement (including the
 transit station, Deep Site galleries, industrial ruin, flooded annex, and
 secondary reservoirs on multiple seeds), signature falloff/wall attenuation,

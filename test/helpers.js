@@ -102,6 +102,33 @@ export function hashU16(arr) {
   return h >>> 0;
 }
 
+// Fingerprint every resident chunk, in key-sorted order so the hash is
+// independent of the order chunks happened to generate in.
+export function hashWorld(world) {
+  const keys = [...world.chunks.keys()].sort();
+  let h = 2166136261 >>> 0;
+  for (const key of keys) {
+    for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+    const ch = hashU16(world.chunks.get(key).data);
+    h ^= ch & 0xffff; h = Math.imul(h, 16777619);
+    h ^= ch >>> 16; h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+// Count occurrences of a block id across every resident chunk.
+export function countBlocks(world, ids) {
+  const want = new Set(ids);
+  const counts = {};
+  for (const id of ids) counts[id] = 0;
+  for (const c of world.chunks.values()) {
+    for (let i = 0; i < c.data.length; i++) {
+      if (want.has(c.data[i])) counts[c.data[i]]++;
+    }
+  }
+  return counts;
+}
+
 export function approxEqual(a, b, eps = 1e-9) {
   return Math.abs(a - b) <= eps;
 }

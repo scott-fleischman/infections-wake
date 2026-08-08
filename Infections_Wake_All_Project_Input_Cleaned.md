@@ -342,3 +342,22 @@ Transcribed from two handwritten pages titled "Infections Wake":
 9. A handbook for all recipes that shows an image of the items in the grid in the pattern for the item — same as *Vintage Story*.
 10. Upgrade graphics a notch.
 11. Make the world bigger.
+
+---
+
+## 23. Huge World Update (Verbal Feedback, August 2026)
+
+Feedback on wishlist item 11 after playing the 192×192 build:
+
+> 192×192 is really small; I can go from one end to the other in like 30
+> seconds or so. It needs to be a huge world, more like 1024×1024 or
+> 10k×10k or maybe even potentially infinite or close to it; and it must
+> perform properly, so some kind of virtual loading, etc. — but with
+> consistent mechanics through it all. It really needs to feel like a
+> world, not a weird biosphere room.
+
+Implemented as a 16,384×16,384-block streamed world: the hand-authored story
+valley stays at 0..192 and never unloads; deterministic wilderness (terrain,
+caves, forests, nests, finite ore hills) generates chunk-by-chunk around the
+player in every direction, out to a containment rim of mountains at the edge
+of the region.

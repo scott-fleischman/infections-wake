@@ -7,17 +7,27 @@
 
 export const WORLD = {
   CHUNK: 16,
-  CHUNKS_X: 12,
-  CHUNKS_Z: 12,
   HEIGHT: 56,
   SEA_LEVEL: 20,
   SURFACE: 24,
+  // Story core: the hand-authored valley (spawn shack, lab, transit, Deep
+  // Site, ...). Generated whole at world start with the legacy sequential
+  // generator, pinned in memory for the whole session, coordinates 0..CORE.
+  CORE_X: 192,
+  CORE_Z: 192,
+  // The world is otherwise unbounded wilderness, streamed in chunks out to a
+  // containment rim HALF_SPAN blocks (Chebyshev) from the core's center —
+  // a 16384×16384-block region. Beyond the rim reads as bedrock.
+  HALF_SPAN: 8192,
+  // Streaming radii (in chunks) and per-frame budgets (generate/mesh ms).
+  VIEW: { mesh: 7, data: 13, genPerFrame: 3, genMs: 6, meshMs: 7 },
 };
-WORLD.SIZE_X = WORLD.CHUNK * WORLD.CHUNKS_X;
-WORLD.SIZE_Z = WORLD.CHUNK * WORLD.CHUNKS_Z;
-// Worldgen densities are tuned per-area at the original 128x128; AREA_SCALE
-// keeps absolute counts (ore veins, nests) proportional when the world grows.
-WORLD.AREA_SCALE = (WORLD.SIZE_X * WORLD.SIZE_Z) / (128 * 128);
+WORLD.CORE_CHUNKS_X = WORLD.CORE_X / WORLD.CHUNK;
+WORLD.CORE_CHUNKS_Z = WORLD.CORE_Z / WORLD.CHUNK;
+WORLD.CENTER_X = WORLD.CORE_X / 2;
+WORLD.CENTER_Z = WORLD.CORE_Z / 2;
+// The legacy core generator's densities were tuned per-area at 128x128.
+WORLD.CORE_AREA_SCALE = (WORLD.CORE_X * WORLD.CORE_Z) / (128 * 128);
 
 // Day length in real seconds (tunable, §27). One full day = DAY_LENGTH seconds.
 // Day runs DAWN→DUSK and night DUSK→DAWN — symmetric fractions make each half
@@ -35,13 +45,23 @@ export const TIME = {
 // ore bodies — deposits you can see, walk to, and exhaust, Factorio-style.
 export const WORLDGEN = {
   oreHills: {
-    count: 4,          // per original 128x128 area — scales with WORLD.AREA_SCALE
+    count: 4,          // per original 128x128 area — core scales with CORE_AREA_SCALE
     radiusMin: 5,
     radiusMax: 8,
     clearance: 26,     // min distance from structure sites & the spawn shack
     spacing: 22,       // min distance between hills
     minOre: 45,        // guaranteed ore blocks per hill
     outcrops: 5,       // ore cells exposed on the flank so the deposit reads from outside
+  },
+  // Streamed wilderness densities (position-hashed, order-independent).
+  wild: {
+    hillCell: 64,      // one candidate ore hill per 64x64 cell...
+    hillChance: 0.7,   // ...that actually forms this often (≈ core density)
+    veinChance: 0.4,   // per-chunk chance of a second ore vein (first is guaranteed)
+    nestChance: 0.045, // per-chunk chance of an infected nest in a cave pocket
+    treeDensity: 0.035,// per-column, scaled down on plains (matches the core)
+    rimStart: 48,      // rim mountains begin this far inside the world border
+    rimHeight: 24,     // how far the containment rim swells above the terrain
   },
 };
 

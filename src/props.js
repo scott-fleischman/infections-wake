@@ -15,17 +15,26 @@ export class Props {
 
   key(x, y, z) { return `${x},${y},${z}`; }
 
-  // One-time scan after generation + saved-edit replay.
+  // One-time scan after generation + saved-edit replay. Worldgen only puts
+  // model-rendered blocks inside the story core (benches, doors, archives,
+  // the kiln...); anything the player built out in the wilderness lives in
+  // the edit log, so core rect + edits covers every prop in the world.
   scanWorld() {
     this.removeAll();
-    const { SIZE_X, SIZE_Z, HEIGHT } = WORLD;
+    const { CORE_X, CORE_Z, HEIGHT } = WORLD;
     const w = this.game.world;
-    for (let x = 0; x < SIZE_X; x++)
-      for (let z = 0; z < SIZE_Z; z++)
+    for (let x = 0; x < CORE_X; x++)
+      for (let z = 0; z < CORE_Z; z++)
         for (let y = 0; y < HEIGHT; y++) {
           const id = w.get(x, y, z);
           if (BLOCKS[id]?.model) this.add(x, y, z, id);
         }
+    for (const [k, id] of w.edits) {
+      if (!BLOCKS[id]?.model) continue;
+      const [x, y, z] = k.split(',').map(Number);
+      if (x >= 0 && x < CORE_X && z >= 0 && z < CORE_Z) continue; // already scanned
+      this.add(x, y, z, id);
+    }
   }
 
   add(x, y, z, id) {
@@ -93,7 +102,16 @@ export class Props {
     const g = this.game;
     const MACHINE_KINDS = new Set(['generator', 'drill', 'lamp', 'beacon', 'turret', 'cradle',
       'battery', 'switch', 'scrubber', 'uv', 'vibturret', 'sensor', 'maint', 'transit_panel']);
+    const p = g.player?.pos;
     for (const e of this.map.values()) {
+      // distance cull: a fog-shrouded prop 100+ blocks out costs draw calls
+      // (and a shadow-pass draw) for nothing. Simulation is unaffected —
+      // machines/furnaces run on world data, this is only their visual.
+      if (p) {
+        const vis = Math.abs(e.x + 0.5 - p.x) < 104 && Math.abs(e.z + 0.5 - p.z) < 104;
+        if (e.group.visible !== vis) e.group.visible = vis;
+        if (!vis) continue;
+      }
       const state = { dt, running: true, aimYaw: null };
       if (MACHINE_KINDS.has(e.kind)) {
         const m = g.machines.get(e.x, e.y, e.z);

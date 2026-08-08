@@ -29,13 +29,13 @@ for (const seed of SEEDS) {
     const w = new World(seed);
     w.generate();
     const mines = w.poi.mines;
-    const want = Math.round(WORLDGEN.oreHills.count * WORLD.AREA_SCALE);
+    const want = Math.round(WORLDGEN.oreHills.count * WORLD.CORE_AREA_SCALE);
     assert.ok(mines.length >= want * 0.6, `enough hills placed: ${mines.length}/${want}`);
     assert.ok(mines.some(m => m.kind === 'iron') && mines.some(m => m.kind === 'coal'),
       'both ore kinds represented');
 
     for (const m of mines) {
-      assert.ok(m.x > 4 && m.x < WORLD.SIZE_X - 4 && m.z > 4 && m.z < WORLD.SIZE_Z - 4, 'in bounds');
+      assert.ok(m.x > 4 && m.x < WORLD.CORE_X - 4 && m.z > 4 && m.z < WORLD.CORE_Z - 4, 'in the core');
       const { count, exposed } = oreNear(w, m);
       assert.ok(count >= WORLDGEN.oreHills.minOre * 0.8,
         `hill at ${m.x},${m.z} holds a real deposit (${count} ore)`);
