@@ -548,6 +548,11 @@ export class World {
         for (let y = surf + 1; y <= surf + 2; y++) write(ex, y, cz + dz, B.AIR);
         if (!BLOCKS[read(ex, surf, cz + dz)]?.solid) write(ex, surf, cz + dz, B.DIRT);
       }
+    // the heart of the hill: a lode cluster that never runs out (kid rule).
+    // Placed before the ore fill so tryOre (STONE/DIRT only) always skips it.
+    const lode = hill.isIron ? B.IRON_LODE : B.COAL_LODE;
+    for (const [lx, lz] of [[0, 0], [-1, 0], [0, -1], [-1, -1]])
+      write(cx + lx, surf, cz + lz, lode);
     let placed = 0;
     const tryOre = (x, y, z) => {
       const id = read(x, y, z);
@@ -868,6 +873,11 @@ export class World {
         for (let y = surf + 1; y <= surf + 2; y++) this._set(ex, y, cz + dz, B.AIR);
         if (!BLOCKS[this.get(ex, surf, cz + dz)]?.solid) this._set(ex, surf, cz + dz, B.DIRT);
       }
+    // the heart of the hill: a lode cluster that never runs out (kid rule).
+    // Placed before the ore fill so tryOre (STONE/DIRT only) always skips it.
+    const lode = isIron ? B.IRON_LODE : B.COAL_LODE;
+    for (const [lx, lz] of [[0, 0], [-1, 0], [0, -1], [-1, -1]])
+      this._set(cx + lx, surf, cz + lz, lode);
     // ore body: chamber walls/floor + a buried core beneath
     let placed = 0;
     const tryOre = (x, y, z) => {

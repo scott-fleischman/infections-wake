@@ -8,6 +8,7 @@ import { Signature } from './signature.js';
 import { InfectedManager } from './infected.js';
 import { Machines } from './power.js';
 import { Props } from './props.js';
+import { doorParts, bedParts, bedHeadFor, yawToCardinal, upgradeEditsPlan, MULTI_IDS } from './multiblock.js';
 import { buildGroundItem, buildBlockMesh, buildProp, disposeGroup } from './models.js';
 import { makeIcon } from './icons.js';
 import { Director } from './director.js';
@@ -222,6 +223,10 @@ class Game {
     if (data) this.loadInto(data);
 
     if (!this._loadedPlayerPos) this.player.spawnAt(this.world.spawnPoint());
+    // Saves from before doors grew tall / beds grew long hold single cells.
+    // Plan first, then write: world.set() mutates world.edits. Must precede
+    // both scans so senses and props see the finished pair.
+    for (const u of upgradeEditsPlan(this.world, this.world.edits)) this.world.set(u.x, u.y, u.z, u.id);
     this.sig.scanWorld();
     this.props.scanWorld(); // prop meshes for model-rendered blocks (gen + saved edits)
     // restore lights for player-placed torches/campfires; a standing door
@@ -708,7 +713,8 @@ class Game {
       if (!blockHit || blockHit.dist > eDist - 0.4) {
         const dmg = held?.def?.dmg || 1;
         enemy.takeHit(dmg, true);
-        // knockback rides on the melee hit only (turrets/traps tick too often)
+        // melee always shoves at full power; continuous sources (UV, traps)
+        // gate on a mostly-spent kb so they stagger rather than stunlock
         enemy.applyKnockback?.(this.player.pos, held?.def?.kb || COMBAT.handKb);
         this.audio.hitEnemy();
         this.inv.useToolDurability(1);
@@ -784,6 +790,29 @@ class Game {
       if (!hit) return;
       const bd = BLOCKS[def.block];
       let tx = hit.x + hit.face[0], ty = hit.y + hit.face[1], tz = hit.z + hit.face[2];
+      // multi-cell furniture: both cells must be clear before either is written
+      if (def.block === B.DOOR) {
+        if (!this.world.inBounds(tx, ty, tz) || !this.world.inBounds(tx, ty + 1, tz)) return;
+        if (this.world.get(tx, ty, tz) !== B.AIR || this.world.get(tx, ty + 1, tz) !== B.AIR) { this.toast('Needs two blocks of clearance.'); return; }
+        if (this.wouldCollide(tx, ty, tz) || this.wouldCollide(tx, ty + 1, tz)) { this.toast('Blocked.'); return; }
+        this.placeBlock(tx, ty, tz, B.DOOR);
+        this.placeBlock(tx, ty + 1, tz, B.DOOR_TOP);
+        this.inv.remove(held.id, 1);
+        this.hud.updateHotbar();
+        return;
+      }
+      if (def.block === B.BED) {
+        const [dx, dz] = yawToCardinal(this.player.yaw);      // the foot lies away from the player
+        const fx = tx + dx, fz = tz + dz;
+        if (!this.world.inBounds(tx, ty, tz) || !this.world.inBounds(fx, ty, fz)) return;
+        if (this.world.get(tx, ty, tz) !== B.AIR || this.world.get(fx, ty, fz) !== B.AIR) { this.toast('Needs two blocks of floor space.'); return; }
+        if (this.wouldCollide(tx, ty, tz) || this.wouldCollide(fx, ty, fz)) { this.toast('Blocked.'); return; }
+        this.placeBlock(tx, ty, tz, bedHeadFor(dx, dz));
+        this.placeBlock(fx, ty, fz, B.BED_FOOT);
+        this.inv.remove(held.id, 1);
+        this.hud.updateHotbar();
+        return;
+      }
       // torches / wires can replace air only; solid blocks must not intersect entities
       if (!this.world.inBounds(tx, ty, tz)) return; // world.set would no-op — don't eat the item
       if (this.world.get(tx, ty, tz) !== B.AIR) return;
@@ -821,6 +850,13 @@ class Game {
     if (id === B.CHEST) this.chests.set(`${x},${y},${z}`, { items: [] });
     if (id === B.TORCH || id === B.CAMPFIRE) this.refreshBlockLight(x, y, z, id);
     if (id === B.DOOR) this.unlocks.doorHung = true; // objectives (persisted via save)
+    // the far cell of a multi-block carries no prop — rebuild its owner's so
+    // the model spans both cells regardless of which half was written first
+    if (id === B.DOOR_TOP || id === B.DOOR_TOP_OPEN) this.props.onBlockChanged(x, y - 1, z, this.world.get(x, y - 1, z));
+    if (id === B.BED_FOOT) {
+      const h = bedParts(this.world, x, y, z).head;
+      if (h) this.props.onBlockChanged(h.x, h.y, h.z, h.id);
+    }
     // loose materials placed with nothing beneath settle immediately (§4.2)
     if (BLOCKS[id]?.falls && this.world.get(x, y - 1, z) === B.AIR) {
       let fy = y;
@@ -873,6 +909,37 @@ class Game {
     const id = this.world.get(x, y, z);
     const def = BLOCKS[id];
     if (!def) return;
+    // Doors (2 tall) and beds (2 long) break as one object from either cell
+    // and drop exactly one item. A legacy short door or an orphaned bed foot
+    // has no partner: MULTI_IDS keeps the second write off innocent neighbors.
+    const door = doorParts(this.world, x, y, z);
+    const bed = door ? null : bedParts(this.world, x, y, z);
+    if (door || bed) {
+      const drop = 'b:' + (door ? B.DOOR : B.BED);
+      const cells = (door ? [door.base, door.top] : [bed.head, bed.foot]).filter(c => c && MULTI_IDS.has(c.id));
+      for (const c of cells) {
+        this.world.set(c.x, c.y, c.z, B.AIR);
+        this.clearBlockCell(c.x, c.y, c.z, c.id);
+      }
+      // settle top cell first: a sand column has to land there before the
+      // lower cell can pull it the rest of the way down
+      for (const c of cells.reverse()) this.settleFalls(c.x, c.y, c.z);
+      this.audio.breakBlock();
+      this.inv.useToolDurability(1);
+      const overflow = this.inv.add(drop, 1);
+      if (overflow > 0) this.dropItemAt({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, drop, overflow);
+      this.audio.pickup(); this.hud.updateHotbar();
+      return;
+    }
+    if (def.lode) {
+      // lodes yield but never deplete — hold LMB to keep extracting
+      this.audio.breakBlock();
+      this.inv.useToolDurability(1);
+      const overflow = this.inv.add(def.lode, 1);
+      if (overflow > 0) this.dropItemAt({ x: x + 0.5, y: y + 1.2, z: z + 0.5 }, def.lode, overflow);
+      this.audio.pickup(); this.hud.updateHotbar();
+      return;
+    }
     this.world.set(x, y, z, B.AIR);
     this.clearBlockCell(x, y, z, id);
     this.audio.breakBlock();
@@ -958,11 +1025,17 @@ class Game {
     }
     switch (def.interact) {
       case 'door': {
-        const open = hit.id === B.DOOR_OPEN;
-        if (open && this.wouldCollide(hit.x, hit.y, hit.z)) { this.toast('Something is in the doorway.'); return; }
+        // either half toggles the pair; the base cell owns the state
+        const p = doorParts(this.world, hit.x, hit.y, hit.z);
+        if (!p || (p.base.id !== B.DOOR && p.base.id !== B.DOOR_OPEN)) return;
+        const open = p.base.id === B.DOOR_OPEN;
+        if (open && (this.wouldCollide(p.base.x, p.base.y, p.base.z) || this.wouldCollide(p.top.x, p.top.y, p.top.z))) { this.toast('Something is in the doorway.'); return; }
         const newId = open ? B.DOOR : B.DOOR_OPEN;
-        this.world.set(hit.x, hit.y, hit.z, newId);
-        this.props.onBlockChanged(hit.x, hit.y, hit.z, newId); // swing the slab
+        this.world.set(p.base.x, p.base.y, p.base.z, newId);
+        // legacy 1-tall doors (old saves, blocked headroom) have no upper half
+        if (p.top.id === B.DOOR_TOP || p.top.id === B.DOOR_TOP_OPEN)
+          this.world.set(p.top.x, p.top.y, p.top.z, open ? B.DOOR_TOP : B.DOOR_TOP_OPEN);
+        this.props.onBlockChanged(p.base.x, p.base.y, p.base.z, newId); // swing the slab
         this.audio.place();
         return;
       }
@@ -1120,7 +1193,10 @@ class Game {
     for (const inf of this.infected.list) {
       if (inf.isFalse || inf.dead) continue;
       if (inf.pos.y < d.top + 2 && inf.pos.x >= d.x0 - 2 && inf.pos.x <= d.x1 + 2
-        && inf.pos.z >= d.z0 - 2 && inf.pos.z <= d.z1 + 2) inf.takeHit(inf.hp * 0.6, true);
+        && inf.pos.z >= d.z0 - 2 && inf.pos.z <= d.z1 + 2) {
+        inf.takeHit(inf.hp * 0.6, true);
+        inf.applyKnockback?.({ x: (d.x0 + d.x1) / 2, z: (d.z0 + d.z1) / 2 }, COMBAT.sterilantKb);
+      }
     }
     // §18.3 valve two: unshielded RUNNING electronics corrode — machines the
     // player powered down in time are spared
@@ -1807,6 +1883,9 @@ class Game {
       const x = Math.floor(inf.pos.x), y = Math.floor(inf.pos.y), z = Math.floor(inf.pos.z);
       if (this.world.get(x, y, z) !== B.TRAP) continue;
       inf.takeHit(7 * dt, true);
+      // ticks every frame while standing in it — gate on a mostly-spent shove
+      // so this stays a stagger-wiggle, not a full ejection every frame
+      if (inf.kb.lengthSq() < 0.4) inf.applyKnockback?.({ x: x + 0.5, z: z + 0.5 }, COMBAT.trapKb);
       const key = `${x},${y},${z}`;
       const wear = (this.trapWear.get(key) || 0) + 7 * dt;
       if (wear > 60) {

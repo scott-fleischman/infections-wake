@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Signature } from '../src/signature.js';
 import { InfectedManager } from '../src/infected.js';
+import { Machines } from '../src/power.js';
 import { B, BLOCKS, TIME, STRAINS, canInfectedBreakBlock } from '../src/config.js';
 import { makeStubGame, makeEmptyWorld, buildFloor } from './helpers.js';
 
@@ -155,6 +156,41 @@ test('encounter bosses are immune to knockback', () => {
   const host = inf.spawn('colony_host', 45.5, 21, 25.5, {});
   host.applyKnockback({ x: 40, y: 21, z: 25.5 }, 14);
   assert.equal(host.kb.length(), 0);
+});
+
+// ---------------- machine knockback (§12, wishlist #3 every source) -------
+
+test('a gun turret shoves a non-boss infected it fires on', () => {
+  const { game, inf } = rig();
+  const machines = new Machines(game);
+  const turret = machines.add(40, 21, 25, B.TURRET);
+  turret.ammo = 5;
+  const drifter = inf.spawn('drifter', 45.5, 21, 25.5, {});
+  const hp0 = drifter.hp;
+  machines.updateTurret(turret, 0.1, true);
+  assert.ok(drifter.hp < hp0, 'turret hit landed');
+  assert.ok(drifter.kb.length() > 0, 'turret fire shoves the target');
+});
+
+test('a vibration turret shoves a non-boss infected it fires on', () => {
+  const { game, inf } = rig();
+  const machines = new Machines(game);
+  const vib = machines.add(40, 21, 25, B.VIB_TURRET);
+  const drifter = inf.spawn('drifter', 45.5, 21, 25.5, {});
+  const hp0 = drifter.hp;
+  machines.updateVibTurret(vib, 0.1, true);
+  assert.ok(drifter.hp < hp0, 'vibration turret hit landed');
+  assert.ok(drifter.kb.length() > 0, 'vibration turret fire shoves the target');
+});
+
+test('a gun turret still cannot budge an encounter boss', () => {
+  const { game, inf } = rig();
+  const machines = new Machines(game);
+  const turret = machines.add(40, 21, 25, B.TURRET);
+  turret.ammo = 5;
+  const host = inf.spawn('colony_host', 45.5, 21, 25.5, {});
+  machines.updateTurret(turret, 0.1, true);
+  assert.equal(host.kb.length(), 0, 'boss immunity holds through the machine path too');
 });
 
 // ---------------- day halves (wishlist #5) ----------------

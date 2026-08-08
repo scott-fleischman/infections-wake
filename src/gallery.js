@@ -31,9 +31,9 @@ const MACHINE_ENTRIES = [
   { key: 'furnace', name: 'Furnace', kind: 'furnace', desc: 'Smelts raw iron; cooks meat. A burning furnace is warm — warmth is a signature.' },
   { key: 'campfire', name: 'Campfire', kind: 'campfire', desc: 'Cooking, warmth, morale. Emits heat and light all night. Everything that emits is a beacon.' },
   { key: 'torch', name: 'Torch', kind: 'torch', desc: 'Cheap light, small heat. Cheap enough to line a perimeter — noticeable enough to matter.' },
-  { key: 'door', name: 'Door (closed)', kind: 'door', opts: {}, desc: 'Blocks bodies and blunts your signature. Drifters batter it; keep a spare.' },
-  { key: 'door_open', name: 'Door (open)', kind: 'door', opts: { open: true }, desc: 'An open door is a corridor for smell, warmth and runners.' },
-  { key: 'bed', name: 'Bed', kind: 'bed', desc: 'Sleep through a quiet night and restore stability. The forecast assault will not be slept through.' },
+  { key: 'door', name: 'Door (closed)', kind: 'door', opts: { tall: true }, desc: 'Two cells tall. Blocks bodies and blunts your signature. Drifters batter it; keep a spare.' },
+  { key: 'door_open', name: 'Door (open)', kind: 'door', opts: { open: true, tall: true }, desc: 'An open door is a corridor for smell, warmth and runners.' },
+  { key: 'bed', name: 'Bed', kind: 'bed', opts: { long: true, dir: [0, 1] }, desc: 'Two cells long. Sleep through a quiet night and restore stability. The forecast assault will not be slept through.' },
   { key: 'archive', name: 'Archive pedestal', kind: 'archive', opts: { tint: 0xe8d8a8 }, desc: 'A Project Lazarus record. Catalog it — duplicates add nothing; the record is never lost.' },
   // steel tier (§11.1)
   { key: 'battery', name: 'Battery bank', kind: 'battery', desc: 'Buffers surplus and bridges outages — scheduled operation. Stored metal has a chemistry signature; a full bank is a target.' },
@@ -69,7 +69,10 @@ const machineStats = (key) => {
   return rows;
 };
 
-const BLOCK_IDS = Object.values(B).filter(id => id !== B.AIR);
+// Internal halves of the multi-block furniture: the far cells have no mesh of
+// their own, and the rotated bed heads are the same object as B.BED.
+const MULTI_HALVES = new Set([B.DOOR_TOP, B.DOOR_TOP_OPEN, B.BED_FOOT, B.BED_N, B.BED_E, B.BED_W]);
+const BLOCK_IDS = Object.values(B).filter(id => id !== B.AIR && !MULTI_HALVES.has(id));
 
 const CATS = {
   machines: { title: 'FABRICATION', mode: '3d' },
@@ -392,7 +395,7 @@ function growHill(kind) {
   showObject(group, { groundScale: 5 });
   const cfg = WORLDGEN.oreHills;
   setCard('SURFACE SURVEY', `Wild ore hill — ${isIron ? 'iron' : 'coal'}`,
-    'A walk-in ore dome, stamped by the same generator the wilderness streams in. Ore shows on the flanks, the chamber inside holds the seam, and part of the deposit runs under the floor. Every deposit is finite.',
+    'A walk-in ore dome, stamped by the same generator the wilderness streams in. Ore shows on the flanks, the chamber inside holds the seam, and part of the deposit runs under the floor. The seam is finite — but the lode cluster at the heart never runs out.',
     [
       ['Radius', `${cfg.radiusMin}–${cfg.radiusMax} blocks`],
       ['Guaranteed ore', `≥ ${cfg.minOre} blocks (this stamp: ${placed})`],

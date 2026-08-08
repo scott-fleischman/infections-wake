@@ -89,6 +89,11 @@ export const B = {
   // industrial ruins / settlement (§4.3)
   RUIN_WALL: 58, RUIN_FLOOR: 59, SCRAP: 60, KILN: 61,
   ARCHIVE_4: 62, ARCHIVE_5: 63, RADIO: 64, DOC_SHELF: 65,
+  // second cells of multi-block furniture (pair math lives in multiblock.js):
+  // doors stand 2 tall, beds lie 2 long with the facing encoded in the head id
+  DOOR_TOP: 66, DOOR_TOP_OPEN: 67, BED_FOOT: 68, BED_N: 69, BED_E: 70, BED_W: 71,
+  // the heart of an ore hill: never-depleting lode blocks (`lode:` field below)
+  IRON_LODE: 72, COAL_LODE: 73,
 };
 
 // Reverse lookup for debugging.
@@ -107,6 +112,10 @@ export const BLOCKS = {
   [B.LEAVES]:     { name: 'Leaves', solid: true, opaque: true, col: 0x3e6b34, hardness: 0.3, tool: 'axe', drop: null, flammable: true },
   [B.IRON_ORE]:   { name: 'Iron ore', solid: true, opaque: true, col: 0x8a8079, accent: 0xc9a58a, hardness: 3.4, tool: 'pick', toolMin: 1, drop: B.IRON_ORE },
   [B.COAL_ORE]:   { name: 'Coal ore', solid: true, opaque: true, col: 0x5c5a58, accent: 0x201f1e, hardness: 2.8, tool: 'pick', drop: B.COAL_ORE },
+  // `lode:` — the block yields that item on every harvest and never breaks
+  // (no `drop`, nothing consumes it): the never-depleting heart of a hill.
+  [B.IRON_LODE]:  { name: 'Iron lode', solid: true, opaque: true, col: 0x93857a, accent: 0xe6bd94, hardness: 4.5, tool: 'pick', toolMin: 1, lode: 'iron_ore_raw' },
+  [B.COAL_LODE]:  { name: 'Coal lode', solid: true, opaque: true, col: 0x53514f, accent: 0x191817, hardness: 3.8, tool: 'pick', lode: 'coal' },
   [B.WATER]:      { name: 'Water', solid: false, opaque: false, col: 0x2c5d8a, liquid: true, transparent: true },
 
   [B.PLANK]:      { name: 'Wood plank', solid: true, opaque: true, col: 0x8a6a3e, hardness: 1.0, tool: 'axe', drop: B.PLANK, flammable: true, place: true },
@@ -124,6 +133,18 @@ export const BLOCKS = {
   [B.DOOR]:       { name: 'Door', solid: true, opaque: false, senseOpaque: true, model: 'door', col: 0x7a5a30, hardness: 1.2, drop: B.DOOR, place: true, interact: 'door', armor: 1 },
   [B.DOOR_OPEN]:  { name: 'Door', solid: false, opaque: false, model: 'door', col: 0x7a5a30, hardness: 1.2, drop: B.DOOR, interact: 'door' },
   [B.BED]:        { name: 'Bed', solid: true, opaque: false, model: 'bed', col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: B.BED, place: true, interact: 'bed' },
+
+  // `model: 'none'` — the far cell of a multi-block. The owner cell's prop
+  // already spans both, so the mesher and props.js draw nothing here; the id
+  // still carries collision, senses and interaction. Never held as an item:
+  // breaking either cell drops one B.DOOR / B.BED (main.js breakBlock).
+  [B.DOOR_TOP]:     { name: 'Door', solid: true, opaque: false, senseOpaque: true, model: 'none', col: 0x7a5a30, hardness: 1.2, drop: null, interact: 'door', armor: 1 },
+  [B.DOOR_TOP_OPEN]:{ name: 'Door', solid: false, opaque: false, model: 'none', col: 0x7a5a30, hardness: 1.2, drop: null, interact: 'door' },
+  // BED itself is the head facing +z; these three cover the other cardinals
+  [B.BED_N]:      { name: 'Bed', solid: true, opaque: false, model: 'bed', col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: null, interact: 'bed' },
+  [B.BED_E]:      { name: 'Bed', solid: true, opaque: false, model: 'bed', col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: null, interact: 'bed' },
+  [B.BED_W]:      { name: 'Bed', solid: true, opaque: false, model: 'bed', col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: null, interact: 'bed' },
+  [B.BED_FOOT]:   { name: 'Bed', solid: true, opaque: false, model: 'none', col: [0x9a3b34,0x6a4a3a,0x5a4634], hardness: 0.5, drop: null, interact: 'bed' },
 
   [B.GENERATOR]:  { name: 'Fuel generator', solid: true, opaque: false, model: 'generator', col: [0x3a4048,0x2f353c,0x24282e], accent: 0xe0a83e, hardness: 3.2, drop: B.GENERATOR, place: true, interact: 'machine', machine: 'generator' },
   [B.WIRE]:       { name: 'Power cable', solid: false, opaque: false, col: 0xc07a2a, hardness: 0.3, drop: B.WIRE, place: true, wire: true, transparent: true, slim: 0.12 },
@@ -469,6 +490,8 @@ export const COMBAT = {
   playerKbUp: 3.0,   // small upward pop (grounded hits only)
   playerKbAccelMul: 0.3, // input authority while being shoved (kbT window)
   playerKbT: 0.25,
+  trapKb: 2,          // spike traps: gentle stagger-wiggle, not an ejection
+  sterilantKb: 8,     // valve two: exposed tissue gets flung off the vent
 };
 
 // Which infected may damage which blocks (wishlist rule): ONLY machine-eater
@@ -491,7 +514,7 @@ export const MACHINES = {
   lamp:  { powerDraw: 1, light: 14, emits: { light: 0.5, electrical: 0.15 }, radius: 26, sanityAura: 6 },
   drill: { powerDraw: 4, orePerSec: 0.5, emits: { heat: 0.2, vibration: 0.9, electrical: 0.4 }, radius: 36 },
   turret: {
-    powerDraw: 3, range: 14, fireRate: 0.55, dmg: 6, heatPerShot: 0.09, heatCool: 0.14, heatMax: 1,
+    powerDraw: 3, range: 14, fireRate: 0.55, dmg: 6, heatPerShot: 0.09, heatCool: 0.14, heatMax: 1, kb: 4,
     emits: { heat: 0.25, electrical: 0.5, vibration: 0.15 }, radius: 24,
   },
   beacon: { powerDraw: 2, emits: { electrical: 0.3 }, radius: 18 },
@@ -501,8 +524,8 @@ export const MACHINES = {
   battery: { capacity: 60, chargeRate: 4, dischargeRate: 8, emits: { metal: 0.4, electrical: 0.2 }, radius: 20 },
   switch:  { powerDraw: 0 },
   scrubber:{ powerDraw: 2, radius: 22, cleanRadius: 9, emits: { electrical: 0.2 } },
-  uv:      { powerDraw: 2, range: 6, dps: 4, cystPerSec: 0.4, emits: { light: 0.3, electrical: 0.2 }, radius: 18 },
-  vibturret:{ powerDraw: 3, range: 10, fireRate: 0.8, dmg: 4, emits: { vibration: 0.6, electrical: 0.4 }, radius: 26 },
+  uv:      { powerDraw: 2, range: 6, dps: 4, cystPerSec: 0.4, kb: 1.5, emits: { light: 0.3, electrical: 0.2 }, radius: 18 },
+  vibturret:{ powerDraw: 3, range: 10, fireRate: 0.8, dmg: 4, kb: 3.5, emits: { vibration: 0.6, electrical: 0.4 }, radius: 26 },
   sensor:  { powerDraw: 1, confidenceBonus: 0.15, emits: { electrical: 0.1 }, radius: 12 },
   maint:   { powerDraw: 0, repairPerSec: 6, radius: 8, plankPerRepair: 40 },
   transit: { powerDraw: 8, relaysNeeded: 2, filtersNeeded: 1, emits: { electrical: 0.5, metal: 0.3 }, radius: 30 },

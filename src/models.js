@@ -207,37 +207,61 @@ function buildTorch() {
   return g;
 }
 
-// opts: { open: bool, axis: 'x' | 'z' } — axis is the direction the wall runs
+// opts: { open: bool, axis: 'x' | 'z', tall: bool } — axis is the direction the
+// wall runs; `tall` spans the door's upper cell (B.DOOR_TOP). Legacy 1-cell
+// doors — old saves, blocked headroom — keep the short shape.
 function buildDoor(opts = {}) {
   const g = new THREE.Group();
   const frame = lambert(P.woodDeep);
-  box(g, 0.07, 1.0, 0.16, frame, -0.465, 0.5, 0);                           // hinge post
-  box(g, 0.07, 1.0, 0.16, frame, 0.465, 0.5, 0);                            // latch post
-  box(g, 1.0, 0.06, 0.16, frame, 0, 0.97, 0);                               // lintel
+  const h = opts.tall ? 2.0 : 1.0;
+  box(g, 0.07, h, 0.16, frame, -0.465, h / 2, 0);                           // hinge post
+  box(g, 0.07, h, 0.16, frame, 0.465, h / 2, 0);                            // latch post
+  box(g, 1.0, 0.06, 0.16, frame, 0, h - 0.03, 0);                           // lintel
   const hinge = new THREE.Group();                                          // slab pivots here
   hinge.position.set(-0.43, 0, 0);
   g.add(hinge);
   const slab = new THREE.Group(); slab.position.set(0.43, 0, 0); hinge.add(slab);
-  box(slab, 0.86, 0.94, 0.09, lambert(P.wood), 0, 0.5, 0);
+  box(slab, 0.86, h - 0.06, 0.09, lambert(P.wood), 0, h / 2, 0);
   for (const sz of [-1, 1]) {                                               // panel insets
-    box(slab, 0.6, 0.3, 0.02, lambert(P.woodDark), 0, 0.7, sz * 0.05);
-    box(slab, 0.6, 0.3, 0.02, lambert(P.woodDark), 0, 0.28, sz * 0.05);
+    if (opts.tall) {
+      box(slab, 0.6, 0.62, 0.02, lambert(P.woodDark), 0, 1.42, sz * 0.05);
+      box(slab, 0.6, 0.62, 0.02, lambert(P.woodDark), 0, 0.56, sz * 0.05);
+    } else {
+      box(slab, 0.6, 0.3, 0.02, lambert(P.woodDark), 0, 0.7, sz * 0.05);
+      box(slab, 0.6, 0.3, 0.02, lambert(P.woodDark), 0, 0.28, sz * 0.05);
+    }
   }
-  box(slab, 0.06, 0.06, 0.14, lambert(P.amber), 0.34, 0.5, 0);              // handle
+  box(slab, 0.06, 0.06, 0.14, lambert(P.amber), 0.34, opts.tall ? 0.95 : 0.5, 0); // handle
   if (opts.open) hinge.rotation.y = 1.45;
   if (opts.axis === 'z') g.rotation.y = Math.PI / 2;
   return g;
 }
 
-function buildBed() {
+// Rotating local (0,0,1) by yaw t gives (sin t, 0, cos t), so this maps a foot
+// direction to the yaw that lands the bed's foot end on that neighbor cell.
+const BED_YAW = { '0,1': 0, '1,0': Math.PI / 2, '-1,0': -Math.PI / 2, '0,-1': Math.PI };
+
+// opts: { long: bool, dir: [dx, dz] } — a 2-cell bed runs from its head cell
+// (this one, with the headboard) into `dir`. Legacy 1-cell beds keep the short
+// shape; the headboard is at -z either way.
+function buildBed(opts = {}) {
   const g = new THREE.Group();
-  box(g, 0.9, 0.14, 0.98, lambert(P.woodDark), 0, 0.13, 0);                 // frame
-  for (const sx of [-1, 1]) for (const sz of [-1, 1])
-    box(g, 0.08, 0.12, 0.08, lambert(P.woodDeep), sx * 0.4, 0.06, sz * 0.44);
-  box(g, 0.82, 0.1, 0.9, lambert(0xcfc7b0), 0, 0.25, 0);                    // mattress
-  box(g, 0.84, 0.07, 0.56, lambert(0x9a3b34), 0, 0.3, 0.18);                // blanket
+  if (opts.long) {
+    box(g, 0.9, 0.14, 1.94, lambert(P.woodDark), 0, 0.13, 0.48);            // frame
+    for (const sx of [-1, 1]) for (const fz of [-0.44, 1.4])
+      box(g, 0.08, 0.12, 0.08, lambert(P.woodDeep), sx * 0.4, 0.06, fz);
+    box(g, 0.82, 0.1, 1.86, lambert(0xcfc7b0), 0, 0.25, 0.48);              // mattress
+    box(g, 0.84, 0.07, 0.8, lambert(0x9a3b34), 0, 0.3, 1.0);                // blanket
+  } else {
+    box(g, 0.9, 0.14, 0.98, lambert(P.woodDark), 0, 0.13, 0);               // frame
+    for (const sx of [-1, 1]) for (const sz of [-1, 1])
+      box(g, 0.08, 0.12, 0.08, lambert(P.woodDeep), sx * 0.4, 0.06, sz * 0.44);
+    box(g, 0.82, 0.1, 0.9, lambert(0xcfc7b0), 0, 0.25, 0);                  // mattress
+    box(g, 0.84, 0.07, 0.56, lambert(0x9a3b34), 0, 0.3, 0.18);              // blanket
+  }
   box(g, 0.5, 0.09, 0.24, lambert(0xe8e0cc), 0, 0.32, -0.32);               // pillow
   box(g, 0.9, 0.3, 0.06, lambert(P.woodDark), 0, 0.3, -0.47);               // headboard
+  if (opts.dir) g.rotation.y = BED_YAW[opts.dir.join(',')] ?? 0;
   return g;
 }
 

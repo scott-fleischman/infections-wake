@@ -3,7 +3,7 @@
 // outside, well clear of the story structures.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { World } from '../src/world.js';
+import { World, oreHillShape } from '../src/world.js';
 import { WORLD, WORLDGEN, B } from '../src/config.js';
 
 const SEEDS = ['wake-mines-a', 'wake-mines-b', 'wake-mines-c'];
@@ -74,4 +74,26 @@ test('each hill chamber is enterable: a 2-tall air mouth exists on the south fac
     }
     assert.ok(mouth, `hill at ${m.x},${m.z} has a walkable entrance`);
   }
+});
+
+test('each hill holds a never-depleting lode cluster at its heart', () => {
+  const w = new World(SEEDS[0]);
+  w.generate();
+  for (const m of w.poi.mines) {
+    const lode = m.kind === 'iron' ? B.IRON_LODE : B.COAL_LODE;
+    let count = 0;
+    for (let dx = -5; dx <= 5; dx++)
+      for (let dz = -5; dz <= 5; dz++)
+        for (let dy = -5; dy <= 5; dy++)
+          if (w.get(m.x + dx, m.y + dy, m.z + dz) === lode) count++;
+    // 4 written by the stamp; allow 1 lost to terrain edge cases
+    assert.ok(count >= 3, `hill at ${m.x},${m.z} holds a lode cluster (${count} ${m.kind} lode)`);
+  }
+});
+
+test('oreHillShape (gallery survey) includes the lode cluster for both kinds', () => {
+  const iron = oreHillShape('gallery-lode-seed', true);
+  const coal = oreHillShape('gallery-lode-seed', false);
+  assert.ok([...iron.blocks.values()].includes(B.IRON_LODE), 'iron hill shape carries IRON_LODE');
+  assert.ok([...coal.blocks.values()].includes(B.COAL_LODE), 'coal hill shape carries COAL_LODE');
 });

@@ -356,6 +356,7 @@ export class Machines {
     m._aim = best ? { x: best.pos.x, y: best.pos.y + 0.5, z: best.pos.z } : null;
     if (best && m.cd <= 0) {
       best.takeHit(cfg.dmg, true, { x: m.x, y: m.y, z: m.z });
+      best.applyKnockback?.({ x: m.x, z: m.z }, cfg.kb);
       m.cd = cfg.fireRate;
       this.game.spawnHitSpark(best.pos, 0xe0a83e);
     }
@@ -375,6 +376,9 @@ export class Machines {
       if (d > cfg.range) continue;
       if (this.game.sig.wallAtten(origin.x, origin.y, origin.z, inf.pos.x, inf.pos.y + 0.8, inf.pos.z) < 0.95) continue;
       inf.takeHit(cfg.dps * dt, true, { x: m.x, y: m.y, z: m.z }); // burned → attack the burner (§12.3)
+      // ticks every frame — only nudge once the last shove has mostly decayed,
+      // or a continuous beam would stunlock the target in place
+      if (inf.kb.lengthSq() < 0.4) inf.applyKnockback?.({ x: m.x, z: m.z }, cfg.kb);
     }
     // erode one cyst film block at a time within range
     m.cystT -= dt;
@@ -440,14 +444,21 @@ export class Machines {
     if (m.progress >= 1) {
       m.progress = 0;
       const { x, y, z, id } = m.oreTarget;
-      const itemId = id === B.IRON_ORE ? 'iron_ore_raw' : id === B.COAL_ORE ? 'coal' : 'stone_shard';
+      const tdef = BLOCKS[id];
+      const itemId = tdef?.lode || (id === B.IRON_ORE ? 'iron_ore_raw' : id === B.COAL_ORE ? 'coal' : 'stone_shard');
       m.buffer[itemId] = (m.buffer[itemId] || 0) + 1;
-      this.game.world.set(x, y, z, B.AIR);
-      this.game.onWorldEditVisual(x, y, z);
-      m.oreTarget = null;
+      // lodes never deplete: leave the block and keep drilling it forever
+      if (!tdef?.lode) {
+        this.game.world.set(x, y, z, B.AIR);
+        this.game.onWorldEditVisual(x, y, z);
+        m.oreTarget = null;
+      }
     }
   }
-  isOre(t) { const id = this.game.world.get(t.x, t.y, t.z); return id === B.IRON_ORE || id === B.COAL_ORE; }
+  isOre(t) {
+    const id = this.game.world.get(t.x, t.y, t.z);
+    return id === B.IRON_ORE || id === B.COAL_ORE || id === B.IRON_LODE || id === B.COAL_LODE;
+  }
   // Nearest ore in a small working radius (Factorio-style): a drill parked on
   // a dense hill deposit eats through the local body, nearest block first,
   // then idles when the deposit is spent.
@@ -459,7 +470,7 @@ export class Machines {
           if (!dx && !dy && !dz) continue;
           const x = m.x + dx, y = m.y + dy, z = m.z + dz;
           const id = this.game.world.get(x, y, z);
-          if (id !== B.IRON_ORE && id !== B.COAL_ORE) continue;
+          if (id !== B.IRON_ORE && id !== B.COAL_ORE && id !== B.IRON_LODE && id !== B.COAL_LODE) continue;
           const d = dx * dx + dy * dy * 0.5 + dz * dz; // slight preference downward
           if (d < bestD) { bestD = d; best = { x, y, z, id }; }
         }
@@ -489,6 +500,7 @@ export class Machines {
     if (m.overheat || m.ammo <= 0 || m.cd > 0) return;
     if (best) {
       best.takeHit(cfg.dmg, true, { x: m.x, y: m.y, z: m.z }); // source → retaliation target (§12.3)
+      best.applyKnockback?.({ x: m.x, z: m.z }, cfg.kb);
       m.ammo--; m.cd = cfg.fireRate; m.heat += cfg.heatPerShot;
       if (m.heat >= cfg.heatMax) { m.overheat = true; this.game.toast('Turret overheated.', 'important'); }
       this.game.spawnTracer(origin, new THREE.Vector3(best.pos.x, best.pos.y + 0.8, best.pos.z), 0x74c7c4);

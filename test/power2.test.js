@@ -115,6 +115,25 @@ test('a full drill stops mining until collected', () => {
   assert.equal(drill.buffer.iron_ore_raw, 24, 'nothing mined while full');
 });
 
+test('a drill on a lode block harvests forever without consuming it', () => {
+  const { world, machines } = rig();
+  buildFloor(world, 8, 14, 8, 14, 1);
+  const gen = place(world, machines, 10, 2, 10, B.GENERATOR);
+  gen.fuel = 100;
+  const drill = place(world, machines, 11, 2, 10, B.DRILL);
+  world.set(11, 1, 10, B.IRON_LODE);
+  machines.solvePower();
+  for (let i = 0; i < 5; i++) machines.updateDrill(drill, 5, true);
+  assert.ok(drill.buffer.iron_ore_raw >= 5, `lode buffered repeatedly (${drill.buffer.iron_ore_raw})`);
+  assert.equal(world.get(11, 1, 10), B.IRON_LODE, 'the lode block is never consumed');
+  // the 24-item full-buffer stop still applies to lode output
+  drill.buffer = { iron_ore_raw: 24 };
+  machines.updateDrill(drill, 5, true);
+  assert.equal(drill.full, true, 'buffer at 24 halts the drill even on a lode');
+  assert.equal(drill.buffer.iron_ore_raw, 24, 'nothing mined while full');
+  assert.equal(world.get(11, 1, 10), B.IRON_LODE, 'still not consumed while full');
+});
+
 test('warm-body turret ignores cold cyst carriers; vibration turret does not', () => {
   const { world, game, machines } = rig();
   buildFloor(world, 8, 20, 8, 20, 1);

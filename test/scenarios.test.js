@@ -65,6 +65,7 @@ test('fortified hangs a real door in the shack doorway', () => {
   const s = game.world.poi.spawn;
   const sx = Math.floor(s.x), surf = s.y - 1, z0 = Math.floor(s.z) - 2;
   assert.equal(game.world.get(sx, surf + 1, z0), B.DOOR, 'door fills the doorway');
+  assert.equal(game.world.get(sx, surf + 2, z0), B.DOOR_TOP, 'and stands two cells tall');
   assert.ok(game.unlocks.doorHung, 'door objective satisfied');
 });
 

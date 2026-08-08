@@ -112,18 +112,23 @@ test('the wilderness has real finite ore hills of both kinds', () => {
   for (let dx = -1; dx <= 1; dx++)
     for (let dz = -1; dz <= 1; dz++) w.ensureChunkData(hcx + dx, hcz + dz);
   const ore = hill.isIron ? B.IRON_ORE : B.COAL_ORE;
-  let count = 0, mouth = false;
+  const lode = hill.isIron ? B.IRON_LODE : B.COAL_LODE;
+  let count = 0, lodeCount = 0, mouth = false;
   for (let dx = -11; dx <= 11; dx++)
     for (let dz = -11; dz <= 11; dz++)
       for (let dy = -4; dy <= 8; dy++) {
-        if (w.get(hill.x + dx, hill.surf + dy, hill.z + dz) === ore) count++;
+        const id = w.get(hill.x + dx, hill.surf + dy, hill.z + dz);
+        if (id === ore) count++;
+        else if (id === lode) lodeCount++;
       }
   for (let dz = 1; dz <= WORLDGEN.oreHills.radiusMax + 1 && !mouth; dz++) {
     for (const ex of [hill.x, hill.x + 1]) {
       if (w.get(ex, hill.surf + 1, hill.z + dz) === B.AIR && w.get(ex, hill.surf + 2, hill.z + dz) === B.AIR) { mouth = true; break; }
     }
   }
+  // the lode cluster must not eat into the finite-ore minOre guarantee
   assert.ok(count >= WORLDGEN.oreHills.minOre * 0.8, `wild hill holds a deposit (${count} ore)`);
+  assert.ok(lodeCount >= 3, `wild hill holds a lode cluster (${lodeCount} ${hill.isIron ? 'iron' : 'coal'} lode)`);
   assert.ok(mouth, 'wild hill has a walkable entrance');
 });
 

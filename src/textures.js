@@ -267,6 +267,19 @@ function paintOre(ctx, ox, oy, rnd, def) {
   }
 }
 
+function paintLode(ctx, ox, oy, rnd, def) {
+  paintStone(ctx, ox, oy, rnd);
+  const [face, edge] = accentPair(def && def.accent);
+  const dark = def && def.accent !== undefined && relLum(def.accent) <= 0.35;
+  const n = ri(rnd, 10, 14); // denser than ordinary ore — a lode reads as richer
+  for (let i = 0; i < n; i++) {
+    const cx = rf(rnd, 5, TILE - 5), cy = rf(rnd, 5, TILE - 5), r = rf(rnd, 2.2, 4.0);
+    chip(ctx, ox, oy, rnd, cx, cy, r, face, edge);
+    ctx.fillStyle = dark ? gray(1.0) : gray(0.99);
+    ctx.fillRect(ox + Math.round(cx - r * 0.35), oy + Math.round(cy - r * 0.45), 1, 1);
+  }
+}
+
 function paintLogTop(ctx, ox, oy, rnd) {
   fillTile(ctx, ox, oy, 0.97);
   const cx = 16 + rf(rnd, -1.5, 1.5), cy = 16 + rf(rnd, -1.5, 1.5);
@@ -554,6 +567,7 @@ const PAINTERS = {
   sand:        { fn: paintSand },
   gravel:      { fn: paintGravel },
   ore:         { fn: paintOre, accent: true },
+  lode:        { fn: paintLode, accent: true },
   log_top:     { fn: paintLogTop },
   log_side:    { fn: paintLogSide },
   plank:       { fn: paintPlank },
@@ -588,6 +602,8 @@ const FAMILIES = {
   [B.LEAVES]:           ALL('leaves'),
   [B.IRON_ORE]:         ALL('ore'),
   [B.COAL_ORE]:         ALL('ore'),
+  [B.IRON_LODE]:        ALL('lode'),
+  [B.COAL_LODE]:        ALL('lode'),
   [B.WATER]:            ALL('water'),
   [B.PLANK]:            ALL('plank'),
   [B.WOOD_WALL]:        { top: 'plank', side: 'timber', bottom: 'plank' },

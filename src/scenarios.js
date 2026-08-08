@@ -28,7 +28,7 @@ const shackOf = (g) => {
 function sealShack(g) {
   const { sx, sz, surf } = shackOf(g);
   placeIfAir(g, sx, surf + 1, sz - 2, B.DOOR);           // hang a door
-  placeIfAir(g, sx, surf + 2, sz - 2, B.WOOD_WALL);      // board the transom
+  placeIfAir(g, sx, surf + 2, sz - 2, B.DOOR_TOP);       // its upper half fills the transom
   placeIfAir(g, sx + 2, surf + 2, sz + 2, B.WOOD_WALL);  // repair collapsed corner
   placeIfAir(g, sx + 2, surf + 3, sz + 2, B.WOOD_WALL);
   placeIfAir(g, sx - 1, surf + 1, sz - 1, B.CAMPFIRE);   // hearth inside
@@ -104,7 +104,7 @@ export const SCENARIOS = {
   },
   miner: {
     name: 'Day 2 — at the ore hill',
-    desc: 'Standing on the nearest ore hill with picks and torches. The deposit below is finite — mine it out.',
+    desc: 'Standing on the nearest ore hill with picks and torches. The deposit below is finite — mine it out. The lode at its heart never runs out.',
     apply(g) {
       sealShack(g);
       give(g, { stone_pick: 1, iron_pick: 1, stone_spear: 1, 'b:38': 10, cooked_meat: 4 });

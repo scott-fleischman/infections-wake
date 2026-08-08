@@ -1,4 +1,5 @@
 import { WORLD, B, BLOCKS } from './config.js';
+import { BED_DIR } from './multiblock.js';
 import { buildProp, animateProp, disposeGroup } from './models.js';
 
 // prop kinds whose animation state follows a machine entry (queried per frame)
@@ -43,13 +44,21 @@ export class Props {
 
   add(x, y, z, id) {
     const def = BLOCKS[id];
-    if (!def?.model) return;
+    // 'none' = the far cell of a multi-block; its owner's prop covers both
+    if (!def?.model || def.model === 'none') return;
     const k = this.key(x, y, z);
     if (this.map.has(k)) this.remove(x, y, z);
     const opts = {};
     if (def.model === 'door') {
       opts.open = id === B.DOOR_OPEN;
       opts.axis = this.doorAxis(x, y, z);
+      const above = this.game.world.get(x, y + 1, z);
+      opts.tall = above === B.DOOR_TOP || above === B.DOOR_TOP_OPEN;
+    }
+    if (def.model === 'bed') {
+      const d = BED_DIR[id];
+      opts.dir = d;
+      opts.long = this.game.world.get(x + d[0], y, z + d[1]) === B.BED_FOOT;
     }
     if (def.model === 'archive') opts.tint = Array.isArray(def.col) ? def.col[0] : def.col;
     if (def.model === 'valve') {
