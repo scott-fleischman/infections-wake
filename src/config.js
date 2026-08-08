@@ -110,10 +110,17 @@ export const BLOCKS = {
   [B.GRAVEL]:     { name: 'Gravel', solid: true, opaque: true, col: 0x6c6a66, hardness: 0.8, tool: 'shovel', drop: B.GRAVEL, falls: true },
   [B.LOG]:        { name: 'Log', solid: true, opaque: true, col: [0x6b4e2e,0x4d3a22,0x6b4e2e], hardness: 1.4, tool: 'axe', drop: B.LOG, flammable: true },
   [B.LEAVES]:     { name: 'Leaves', solid: true, opaque: true, col: 0x3e6b34, hardness: 0.3, tool: 'axe', drop: null, flammable: true },
-  [B.IRON_ORE]:   { name: 'Iron ore', solid: true, opaque: true, col: 0x8a8079, accent: 0xc9a58a, hardness: 3.4, tool: 'pick', toolMin: 1, drop: B.IRON_ORE },
+  // deliberately NO `toolMin` on raw ore: the iron pickaxe is bought with iron
+  // ingots, so gating the ore behind an iron pick locks the tier against
+  // itself. A stone pick digs it out (bare hands too, at a crawl) and the iron
+  // pick is a speed reward rather than a key. test/progression.test.js proves
+  // every tier is reachable from the one below — do not add `toolMin` here.
+  [B.IRON_ORE]:   { name: 'Iron ore', solid: true, opaque: true, col: 0x8a8079, accent: 0xc9a58a, hardness: 3.4, tool: 'pick', drop: B.IRON_ORE },
   [B.COAL_ORE]:   { name: 'Coal ore', solid: true, opaque: true, col: 0x5c5a58, accent: 0x201f1e, hardness: 2.8, tool: 'pick', drop: B.COAL_ORE },
   // `lode:` — the block yields that item on every harvest and never breaks
   // (no `drop`, nothing consumes it): the never-depleting heart of a hill.
+  // The iron lode DOES keep `toolMin` — it is the reward the iron pick buys,
+  // and the finite ore around it is what bootstraps you to that pick.
   [B.IRON_LODE]:  { name: 'Iron lode', solid: true, opaque: true, col: 0x93857a, accent: 0xe6bd94, hardness: 4.5, tool: 'pick', toolMin: 1, lode: 'iron_ore_raw' },
   [B.COAL_LODE]:  { name: 'Coal lode', solid: true, opaque: true, col: 0x53514f, accent: 0x191817, hardness: 3.8, tool: 'pick', lode: 'coal' },
   [B.WATER]:      { name: 'Water', solid: false, opaque: false, col: 0x2c5d8a, liquid: true, transparent: true },
@@ -252,6 +259,16 @@ export const ITEMS = {
 
 // Tool tier names for messaging.
 export const TOOL_TIER = ['stone', 'iron', 'steel'];
+
+// Harvest gate. A block carrying `toolMin` yields nothing unless the held tool
+// is the right kind AND at least that tier; everything else always yields (bare
+// hands included — just slowly). Keep this the only implementation: the mining
+// loop and the look-at prompt both read it, and test/progression.test.js walks
+// the recipe graph through it to prove no tier is gated behind itself.
+export function canHarvestBlock(def, toolDef) {
+  if (def?.toolMin == null) return true;
+  return !!toolDef && toolDef.tool === def.tool && (toolDef.tier ?? -1) >= def.toolMin;
+}
 
 // --- Crafting recipes ----------------------------------------------------
 // station: null (hand), 'bench', 'furnace'. cost: {itemOrBlock: n}. out: {id, n}.

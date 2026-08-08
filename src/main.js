@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WORLD, TIME, B, BLOCKS, ITEMS, SCORE, SANITY, RECOVERY, PLAYER, STRAINS, MACHINES, DEEP, ACCESS_DEFAULTS, COMBAT, canInfectedBreakBlock } from './config.js';
+import { WORLD, TIME, B, BLOCKS, ITEMS, SCORE, SANITY, RECOVERY, PLAYER, STRAINS, MACHINES, DEEP, ACCESS_DEFAULTS, COMBAT, canInfectedBreakBlock, canHarvestBlock } from './config.js';
 import { RNG } from './rng.js';
 import { World } from './world.js';
 import { Player } from './player.js';
@@ -2216,7 +2216,7 @@ class Game {
         const names = { pick: 'pickaxe', axe: 'axe', shovel: 'shovel' };
         const held = this.player.heldItem();
         let hint = `hold LMB to ${verbs[def.tool] || 'break'}`;
-        if (def.toolMin != null && !(held?.def?.tool === def.tool && held.def.tier >= def.toolMin))
+        if (!canHarvestBlock(def, held?.def))
           hint = `needs an iron ${names[def.tool]}`;
         else if (def.tool && held?.def?.tool !== def.tool)
           hint += ` (${names[def.tool]} is faster)`;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER, BLOCKS, B, COMBAT } from './config.js';
+import { PLAYER, BLOCKS, B, COMBAT, canHarvestBlock } from './config.js';
 
 // First-person controller: pointer-lock look, WASD move, AABB voxel collision,
 // and a DDA raycast for break/place/interact targeting.
@@ -215,12 +215,11 @@ export class Player {
     // tool speed
     const held = this.heldItem();
     let speed = 1;
-    let canHarvest = true;
     if (def.tool) {
       if (held && held.def.tool === def.tool) speed = held.def.speed || 1;
       else speed = 0.5;
-      if (def.toolMin != null) canHarvest = held && held.def.tool === def.tool && held.def.tier >= def.toolMin;
     } else if (held && held.def.tool) speed = (held.def.speed || 1) * 0.8;
+    const canHarvest = canHarvestBlock(def, held?.def);
     const time = def.hardness / speed;
     this.mineProgress += dt / time;
     this.game.setMineOverlay(hit, this.mineProgress);
