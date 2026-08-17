@@ -1027,45 +1027,90 @@ export class World {
     this.poi.colony = { x: cx, y: cy, z: cz, hostSpawn: { x: cx + 0.5, y: cy - 1, z: cz + 0.5 } };
   }
 
-  // Starting refuge: a small ruined shack holding the one-time emergency
-  // recovery pad (§13.2 — it protects the first learning cycle only).
+  // Starting refuge: a ruined shack holding the one-time emergency recovery
+  // pad (§13.2 — it protects the first learning cycle only), standing in a
+  // cleared glade. Runs AFTER placeTrees()/scatterSurface(), so the sweep can
+  // simply delete the canopy that landed on top of it.
+  //
+  // TWO STANDING CONSTRAINTS, both enforced by tests — do not break them:
+  //  1. this.pickups is INDEX-STABLE: `pickupsTaken` in a save file is a Set
+  //     of indices into it, so a save written before this shack grew must keep
+  //     pointing at the same litter. The glade clears BLOCKS only; the scatter
+  //     list is never touched, added to, or reordered here.
+  //  2. The emergency pad cell (sx+1, surf+1, sz+1) and its headroom must stay
+  //     AIR forever — recovery.js respawns the player standing in it.
   placeStartRefuge() {
     const sx = Math.floor(CORE_X * 0.28);
     const sz = Math.floor(CORE_Z * 0.28);
-    // flatten a 7x7 pad
-    let surf = SURFACE;
+    const CLEAR_R = 10;   // glade radius: nothing wooden left standing within 10
+    const PAD = 5;        // flattened building pad half-width (9x9 shack + 1 margin)
+
+    // flatten an 11x11 pad around the mean surface height
     let acc = 0, n = 0;
-    for (let x = sx - 3; x <= sx + 3; x++)
-      for (let z = sz - 3; z <= sz + 3; z++) { acc += this.surfaceY(x, z); n++; }
-    surf = Math.round(acc / n);
-    for (let x = sx - 3; x <= sx + 3; x++)
-      for (let z = sz - 3; z <= sz + 3; z++) {
-        for (let y = surf + 1; y <= surf + 6; y++) this._set(x, y, z, B.AIR);
+    for (let x = sx - PAD; x <= sx + PAD; x++)
+      for (let z = sz - PAD; z <= sz + PAD; z++) { acc += this.surfaceY(x, z); n++; }
+    const surf = Math.round(acc / n);
+    for (let x = sx - PAD; x <= sx + PAD; x++)
+      for (let z = sz - PAD; z <= sz + PAD; z++) {
+        // clear to surf+8: the walls reach surf+4 and the roof surf+5, so the
+        // headroom above the shack stays open even on a rising slope
+        for (let y = surf + 1; y <= surf + 8; y++) this._set(x, y, z, B.AIR);
         this._set(x, surf, z, B.GRASS);
         for (let y = surf - 3; y < surf; y++) if (this.get(x, y, z) === B.AIR) this._set(x, y, z, B.DIRT);
       }
-    // shack: 5x5 timber walls, 3 high, doorway south, half-collapsed corner
-    const x0 = sx - 2, z0 = sz - 2, x1 = sx + 2, z1 = sz + 2;
+
+    // The glade: strip every trunk and canopy in a 10-block disc so the refuge
+    // reads as a clearing you can see out of, instead of a hut in a thicket.
+    // Full-column scan (not surface-up): a leaf overhanging from a neighbouring
+    // tree can sit below this column's own surface on a slope, and the promise
+    // we make is "no wood anywhere in the disc", not "no wood above ground".
+    for (let x = sx - CLEAR_R; x <= sx + CLEAR_R; x++)
+      for (let z = sz - CLEAR_R; z <= sz + CLEAR_R; z++) {
+        if (Math.hypot(x - sx, z - sz) > CLEAR_R) continue;
+        for (let y = 0; y < HEIGHT; y++) {
+          const id = this.get(x, y, z);
+          if (id === B.LOG || id === B.LEAVES) this._set(x, y, z, B.AIR);
+        }
+      }
+
+    // shack: 9x9 timber walls, 4 high, doorway south, half-collapsed corner
+    const x0 = sx - 4, z0 = sz - 4, x1 = sx + 4, z1 = sz + 4;
     for (let x = x0; x <= x1; x++)
       for (let z = z0; z <= z1; z++) {
         const isWall = x === x0 || x === x1 || z === z0 || z === z1;
         if (!isWall) continue;
-        for (let y = 1; y <= 3; y++) {
-          // collapsed corner (weathered opening the player must repair)
-          if (x === x1 && z === z1 && y > 1) continue;
+        for (let y = 1; y <= 4; y++) {
+          // collapsed corner (weathered opening the player must repair) — two
+          // cells wide now that the shack is, so it still reads as damage
+          if (x >= x1 - 1 && z >= z1 - 1 && y > 1) continue;
           this._set(x, surf + y, z, B.WOOD_WALL);
         }
       }
-    // doorway (open — the player learns to craft a door)
-    this._set(sx, surf + 1, z0, B.AIR);
-    this._set(sx, surf + 2, z0, B.AIR);
+    // doorway, 2 wide and 2 tall (open — the player learns to craft a door)
+    for (const dx of [0, 1]) {
+      this._set(sx + dx, surf + 1, z0, B.AIR);
+      this._set(sx + dx, surf + 2, z0, B.AIR);
+    }
+    // a shuttered window slot on the west wall so the interior is not a black box
+    for (const dz of [-1, 0, 1]) this._set(x0, surf + 2, sz + dz, B.AIR);
     // partial roof
     for (let x = x0; x <= x1; x++)
       for (let z = z0; z <= z1; z++)
-        if ((x + z) % 3 !== 0) this._set(x, surf + 4, z, B.PLANK);
-    // a crafting bench inside, and the dusty shortwave set (§15.8)
-    this._set(sx - 1, surf + 1, sz + 1, B.BENCH);
-    this._set(sx + 1, surf + 1, sz, B.RADIO);
+        if ((x + z) % 3 !== 0) this._set(x, surf + 5, z, B.PLANK);
+    // Furnishings. The RADIO stays at (sx+1, sz) — fullworld.test.js pins it
+    // there — and the pad row OUTSIDE the south wall (z = sz-5, one clear of
+    // the wall at z0 = sz-4) stays empty because the `powered` dev scenario
+    // wires its generator spine along it. It was z = sz-3 while the shack was
+    // 5x5; at 9x9 that row is interior floor, so the spine moved out with the
+    // wall. Keep the two in step if this shack is ever resized again.
+    this._set(sx - 1, surf + 1, sz + 1, B.BENCH);   // crafting bench
+    this._set(sx + 1, surf + 1, sz, B.RADIO);       // the dusty shortwave set (§15.8)
+    this._set(sx - 3, surf + 1, sz + 2, B.CHEST);   // a looted crate in the back corner
+    // _set() writes raw voxels: it bypasses Game.placeBlock(), which is the ONLY
+    // thing that registers an entry in game.chests. Record the cell so setupWorld
+    // can adopt it the way it already adopts the transit panel and the ruin kiln
+    // — without that the crate shows an [F] prompt that does nothing at all.
+    this.poi.crate = { x: sx - 3, y: surf + 1, z: sz + 2 };
     this.poi.spawn = { x: sx + 0.5, y: surf + 1, z: sz + 0.5 };
     this.poi.emergency = { x: sx + 1, y: surf + 1, z: sz + 1 };
   }

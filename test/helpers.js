@@ -33,6 +33,11 @@ export function makeStubGame(overrides = {}) {
 
     scene: { add() {}, remove() {} },
     lights: { set() {}, remove() {} },
+    // No-op particle service. The real one owns an InstancedMesh and is only
+    // built once a WebGL scene exists; the sim calls into it from hot paths
+    // (block breaks, deaths, melee hits) so headless rigs need every hook
+    // present. Kept a plain no-op — nothing in the simulation reads it back.
+    particles: { burstBlock() {}, burstDeath() {}, burstHit() {}, spawn() {}, update() {} },
     hud: {
       updateThreat() {}, showAssaultBanner() {},
       updateAssaultRemaining() {}, flashIncursion() {},

@@ -19,7 +19,15 @@ const placeIfAir = (g, x, y, z, id) => {
 };
 
 // The starter shack around the spawn point (world.js placeStartRefuge):
-// 5x5 walls centered on spawn, doorway at (sx, surf+1..2, sz-2).
+// 9x9 walls centered on spawn — walls at x/z = sx±4, interior sx-3..sx+3.
+// Everything below is derived from these, NOT hand-copied offsets: the shack
+// grew from 5x5 to 9x9 once already and the hard-coded numbers here silently
+// hung a door in the middle of the room while the real doorway stayed open.
+const SHACK_R = 4;                  // half-width: wall ring sits at ±SHACK_R
+const DOOR_W = 2;                   // doorway is carved 2 wide at x = sx..sx+1
+// The `powered` spine runs one row clear of the south wall, on the flattened
+// 11x11 pad (world.js PAD = 5). Any row inside sz-SHACK_R is interior floor.
+const SPINE_DZ = -(SHACK_R + 1);
 const shackOf = (g) => {
   const s = g.world.poi.spawn;
   return { sx: Math.floor(s.x), sz: Math.floor(s.z), surf: s.y - 1 };
@@ -27,10 +35,21 @@ const shackOf = (g) => {
 
 function sealShack(g) {
   const { sx, sz, surf } = shackOf(g);
-  placeIfAir(g, sx, surf + 1, sz - 2, B.DOOR);           // hang a door
-  placeIfAir(g, sx, surf + 2, sz - 2, B.DOOR_TOP);       // its upper half fills the transom
-  placeIfAir(g, sx + 2, surf + 2, sz + 2, B.WOOD_WALL);  // repair collapsed corner
-  placeIfAir(g, sx + 2, surf + 3, sz + 2, B.WOOD_WALL);
+  const z0 = sz - SHACK_R, x1 = sx + SHACK_R, z1 = sz + SHACK_R;
+  // Hang a door in EVERY column of the doorway. worldgen carves it DOOR_W wide
+  // and 2 tall, so a single leaf would leave the rest of the hole gaping.
+  for (let dx = 0; dx < DOOR_W; dx++) {
+    placeIfAir(g, sx + dx, surf + 1, z0, B.DOOR);        // hang a door
+    placeIfAir(g, sx + dx, surf + 2, z0, B.DOOR_TOP);    // its upper half fills the transom
+  }
+  // Repair the collapsed SE corner. worldgen skips every WALL cell with
+  // x >= x1-1 && z >= z1-1 above y = surf+1, so the breach is the outer two
+  // cells of each wall run, from surf+2 up to the wall top at surf+4.
+  for (let x = x1 - 1; x <= x1; x++)
+    for (let z = z1 - 1; z <= z1; z++) {
+      if (x !== x1 && z !== z1) continue;               // interior corner cell — never was a wall
+      for (let y = surf + 2; y <= surf + 4; y++) placeIfAir(g, x, y, z, B.WOOD_WALL);
+    }
   placeIfAir(g, sx - 1, surf + 1, sz - 1, B.CAMPFIRE);   // hearth inside
   placeIfAir(g, sx + 1, surf + 2, sz, B.TORCH);
   g.unlocks.doorHung = true;
@@ -165,17 +184,21 @@ export const SCENARIOS = {
       ironKit(g);
       give(g, { coal: 20, turret_ammo: 60, iron_ampoule: 2, 'b:23': 8, 'b:14': 8 });
       const { sx, sz, surf } = shackOf(g);
-      // wire spine along the flattened row in front of the shack (wires are
-      // walkable, so it may cross the doorway path). Consumers must touch a
-      // spine wire: a wired generator powers nothing by direct adjacency.
-      placeIfAir(g, sx + 3, surf + 1, sz - 3, B.GENERATOR);
-      for (const dx of [2, 1, 0, -1]) placeIfAir(g, sx + dx, surf + 1, sz - 3, B.WIRE);
-      placeIfAir(g, sx + 2, surf + 2, sz - 3, B.LAMP);      // lamp above the wire
-      placeIfAir(g, sx - 2, surf + 1, sz - 3, B.TURRET);
+      // Wire spine along the flattened pad row in FRONT of the shack — one row
+      // clear of the south wall (SPINE_DZ), not inside it. Wires are walkable,
+      // so it may cross the doorway path. Consumers must touch a spine wire: a
+      // wired generator powers nothing by direct adjacency. The turret only
+      // acquires targets through unobstructed air (power.js wallAtten >= 0.95),
+      // so it has to stand outside the timber, or it is a room gun.
+      const sz3 = sz + SPINE_DZ;
+      placeIfAir(g, sx + 3, surf + 1, sz3, B.GENERATOR);
+      for (const dx of [2, 1, 0, -1]) placeIfAir(g, sx + dx, surf + 1, sz3, B.WIRE);
+      placeIfAir(g, sx + 2, surf + 2, sz3, B.LAMP);      // lamp above the wire
+      placeIfAir(g, sx - 2, surf + 1, sz3, B.TURRET);
       // beacon placed but unwired: registering + charging it is the tester's
       // first task (matches the open objective)
-      placeIfAir(g, sx - 3, surf + 1, sz - 3, B.BEACON);
-      const gen = g.machines.get(sx + 3, surf + 1, sz - 3);
+      placeIfAir(g, sx - 3, surf + 1, sz3, B.BEACON);
+      const gen = g.machines.get(sx + 3, surf + 1, sz3);
       if (gen) gen.fuel = 40; // the compound arrives live — and loud
       g.addValley('firstAssault');
       g.unlocks.genRan = true;

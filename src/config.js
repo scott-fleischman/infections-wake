@@ -236,11 +236,11 @@ export const ITEMS = {
   stone_pick:   { name: 'Stone pickaxe', color: 0x8a8f96, tool: 'pick', tier: 0, speed: 2.2, dmg: 2, stack: 1, dur: 60 },
   stone_axe:    { name: 'Stone axe', color: 0x8a8f96, tool: 'axe', tier: 0, speed: 2.2, dmg: 3, stack: 1, dur: 60 },
   stone_shovel: { name: 'Stone shovel', color: 0x8a8f96, tool: 'shovel', tier: 0, speed: 2.4, dmg: 1, stack: 1, dur: 60 },
-  stone_spear:  { name: 'Stone spear', color: 0x8a8f96, tool: 'sword', tier: 0, speed: 1, dmg: 5, stack: 1, dur: 50, reach: 4.2, kb: 5 },
+  stone_spear:  { name: 'Stone spear', color: 0x8a8f96, tool: 'sword', tier: 0, speed: 1, dmg: 5, stack: 1, dur: 50, reach: 4.2, kb: 0.5 },
 
   iron_pick:    { name: 'Iron pickaxe', color: 0xd0d4d8, tool: 'pick', tier: 1, speed: 4.0, dmg: 4, stack: 1, dur: 220 },
   iron_axe:     { name: 'Iron axe', color: 0xd0d4d8, tool: 'axe', tier: 1, speed: 4.0, dmg: 5, stack: 1, dur: 220 },
-  iron_blade:   { name: 'Iron blade', color: 0xe0e4e8, tool: 'sword', tier: 1, speed: 1, dmg: 9, stack: 1, dur: 200, reach: 4.0, spec: 'combat', kb: 6 },
+  iron_blade:   { name: 'Iron blade', color: 0xe0e4e8, tool: 'sword', tier: 1, speed: 1, dmg: 9, stack: 1, dur: 200, reach: 4.0, spec: 'combat', kb: 0.5 },
   iron_ampoule: { name: 'Biotic ampoule', color: 0x7fae62, stack: 8, desc: 'Continuity charge for a field beacon.' },
   suppressant:  { name: 'Neural suppressant', color: 0x86d4d0, stack: 8, sanity: 30, desc: 'Restores neural stability.' },
   turret_ammo:  { name: 'Turret slugs', color: 0xc9a58a, stack: 99 },
@@ -249,7 +249,7 @@ export const ITEMS = {
   // steel & advanced containment (§11.1)
   steel_ingot:  { name: 'Steel ingot', color: 0x9aa4b0, stack: 99, desc: 'Smelted at the restored industrial kiln.' },
   steel_pick:   { name: 'Steel pickaxe', color: 0x9aa4b0, tool: 'pick', tier: 2, speed: 6.0, dmg: 5, stack: 1, dur: 480 },
-  steel_blade:  { name: 'Steel blade', color: 0xaeb8c4, tool: 'sword', tier: 2, speed: 1, dmg: 14, stack: 1, dur: 420, reach: 4.0, spec: 'combat', kb: 7 },
+  steel_blade:  { name: 'Steel blade', color: 0xaeb8c4, tool: 'sword', tier: 2, speed: 1, dmg: 14, stack: 1, dur: 420, reach: 4.0, spec: 'combat', kb: 0.5 },
   iron_armor:   { name: 'Iron harness', color: 0xb8bcc0, stack: 1, armor: 0.3, dur: 160, desc: 'Worn while carried. Absorbs a third of each hit.' },
   hide:         { name: 'Animal hide', color: 0x9a8a72, stack: 20 },
   relay_module: { name: 'Control relay', color: 0xe0a83e, stack: 8, desc: 'Transit restoration component. Salvaged from machine scrap and laboratories.' },
@@ -498,17 +498,26 @@ export const RECIPES = [
 ];
 
 // --- Combat feel (§12) ----------------------------------------------------
-// Knockback: melee hits shove the target. Weapon `kb` overrides handKb;
-// infected shove the player on a landed hit. Bosses are immune.
+// Knockback: every damage source shoves the target. `kb` fields are DISTANCE
+// IN BLOCKS travelled by an unarmoured (scale 1) body — the impulse is derived
+// as distance * kbDecay, because the integral of v0*e^(-decay*t) is v0/decay.
+// Full shoves also open a short stagger window (kbStun) during which the body
+// cannot walk, chew or attack; without it the body simply walks the shove off
+// (a runner at speed 4.4 used to CLOSE distance while "knocked back").
+// Weapon `kb` overrides handKb; infected shove the player on a landed hit.
+// Bosses are immune.
 export const COMBAT = {
-  handKb: 2.5,       // bare-hand / non-weapon knockback power
+  handKb: 0.25,      // bare-hand / non-weapon shove, in blocks
   kbDecay: 6,        // per-second exponential decay of an infected's shove
+  kbCutoff: 0.05,    // shove ends below this speed (keeps travel ≈ the configured distance)
+  kbStun: 0.3,       // stagger window opened by a full shove, seconds
+  flinchT: 0.18,     // visual recoil on taking a hit, seconds
   playerKb: 6.5,     // horizontal impulse on the player when an infected connects
   playerKbUp: 3.0,   // small upward pop (grounded hits only)
   playerKbAccelMul: 0.3, // input authority while being shoved (kbT window)
   playerKbT: 0.25,
-  trapKb: 2,          // spike traps: gentle stagger-wiggle, not an ejection
-  sterilantKb: 8,     // valve two: exposed tissue gets flung off the vent
+  trapKb: 0.12,       // spike traps: gentle stagger-wiggle, not an ejection
+  sterilantKb: 0.5,   // valve two: exposed tissue gets flung off the vent
 };
 
 // Which infected may damage which blocks (wishlist rule): ONLY machine-eater
@@ -531,7 +540,7 @@ export const MACHINES = {
   lamp:  { powerDraw: 1, light: 14, emits: { light: 0.5, electrical: 0.15 }, radius: 26, sanityAura: 6 },
   drill: { powerDraw: 4, orePerSec: 0.5, emits: { heat: 0.2, vibration: 0.9, electrical: 0.4 }, radius: 36 },
   turret: {
-    powerDraw: 3, range: 14, fireRate: 0.55, dmg: 6, heatPerShot: 0.09, heatCool: 0.14, heatMax: 1, kb: 4,
+    powerDraw: 3, range: 14, fireRate: 0.55, dmg: 6, heatPerShot: 0.09, heatCool: 0.14, heatMax: 1, kb: 0.5,
     emits: { heat: 0.25, electrical: 0.5, vibration: 0.15 }, radius: 24,
   },
   beacon: { powerDraw: 2, emits: { electrical: 0.3 }, radius: 18 },
@@ -541,8 +550,8 @@ export const MACHINES = {
   battery: { capacity: 60, chargeRate: 4, dischargeRate: 8, emits: { metal: 0.4, electrical: 0.2 }, radius: 20 },
   switch:  { powerDraw: 0 },
   scrubber:{ powerDraw: 2, radius: 22, cleanRadius: 9, emits: { electrical: 0.2 } },
-  uv:      { powerDraw: 2, range: 6, dps: 4, cystPerSec: 0.4, kb: 1.5, emits: { light: 0.3, electrical: 0.2 }, radius: 18 },
-  vibturret:{ powerDraw: 3, range: 10, fireRate: 0.8, dmg: 4, kb: 3.5, emits: { vibration: 0.6, electrical: 0.4 }, radius: 26 },
+  uv:      { powerDraw: 2, range: 6, dps: 4, cystPerSec: 0.4, kb: 0.12, emits: { light: 0.3, electrical: 0.2 }, radius: 18 },
+  vibturret:{ powerDraw: 3, range: 10, fireRate: 0.8, dmg: 4, kb: 0.5, emits: { vibration: 0.6, electrical: 0.4 }, radius: 26 },
   sensor:  { powerDraw: 1, confidenceBonus: 0.15, emits: { electrical: 0.1 }, radius: 12 },
   maint:   { powerDraw: 0, repairPerSec: 6, radius: 8, plankPerRepair: 40 },
   transit: { powerDraw: 8, relaysNeeded: 2, filtersNeeded: 1, emits: { electrical: 0.5, metal: 0.3 }, radius: 30 },
@@ -777,6 +786,10 @@ export const PLAYER = {
   maxHealth: 100, maxHunger: 100,
   reach: 5.0,
   height: 1.7, radius: 0.35, eye: 1.55,
+  // How far behind the eye the visible first-person body is seated. The camera
+  // sits only ~0.19 above the shoulder line, so a body centred on the player
+  // presses a flat yoke face right against the near plane — see main.js.
+  bodyBack: 0.18,
   walk: 4.4, sprint: 7.0, jump: 8.4, gravity: 26,
   hungerPerSec: 0.055, starveDmg: 1.2, // ~1 full bar per 30-minute day
   regenAtHunger: 40, regenRate: 1.5,
