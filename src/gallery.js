@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { B, B_NAME, BLOCKS, ITEMS, STRAINS, MACHINES, TIME, WORLDGEN } from './config.js';
-import { buildProp, buildInfectedMesh, buildBlockMesh, buildGroundItem, animateProp, disposeGroup } from './models.js';
+import { buildProp, buildInfectedMesh, buildBlockMesh, buildGroundItem, buildToolMesh, animateProp, disposeGroup } from './models.js';
 import { treeShape, oreHillShape } from './world.js';
 import { Sky } from './sky.js';
 import { RNG } from './rng.js';
@@ -74,10 +74,27 @@ const machineStats = (key) => {
 const MULTI_HALVES = new Set([B.DOOR_TOP, B.DOOR_TOP_OPEN, B.BED_FOOT, B.BED_N, B.BED_E, B.BED_W]);
 const BLOCK_IDS = Object.values(B).filter(id => id !== B.AIR && !MULTI_HALVES.has(id));
 
+// Every tool and weapon in the game, derived from ITEMS rather than hand-listed
+// — a new tool tier shows up in the archive the moment config.js declares it,
+// with no second list to forget. The blurb is the item's own numbers: the same
+// def the world, the viewmodel and the hotbar read.
+const TOOL_ENTRIES = Object.keys(ITEMS)
+  .filter(id => ITEMS[id].tool)
+  .map(id => ({
+    key: id,
+    name: ITEMS[id].name,
+    desc: `${ITEMS[id].tool} · tier ${ITEMS[id].tier} · ${ITEMS[id].dmg} dmg`
+      + (ITEMS[id].kb ? ` · ${ITEMS[id].kb} block knockback` : '')
+      + ` · ${ITEMS[id].dur} durability`,
+  }));
+
 const CATS = {
   machines: { title: 'FABRICATION', mode: '3d' },
   infected: { title: 'SPECIMENS', mode: '3d' },
   blocks: { title: 'MATERIALS', mode: '3d' },
+  // tools render in the same studio viewport as the other 3d sections; only the
+  // builder differs (buildToolMesh instead of buildProp)
+  tools: { title: 'TOOLS', mode: '3d' },
   items: { title: 'FIELD KIT', mode: 'icons' },
   trees: { title: 'FLORA', mode: 'trees' },
   atmosphere: { title: 'ATMOSPHERE', mode: '3d' },
@@ -332,6 +349,18 @@ function blockDesc(def) {
   return '';
 }
 
+function showTool(entry) {
+  const def = ITEMS[entry.key];
+  // buildToolMesh stands the tool on its handle butt pointing +Y — the same
+  // group the first-person viewmodel grips and a dropped tool lies on, so what
+  // the archive shows is literally what you carry. A tool is a fraction of a
+  // block tall, so the studio pad shrinks with it instead of dwarfing it.
+  showObject(buildToolMesh(entry.key), { groundScale: 0.6 });
+  const stats = itemStats(def);
+  if (def.kb) stats.push(['Knockback', `${def.kb} blocks`]);
+  setCard('TOOL RECORD', def.name, entry.desc, stats);
+}
+
 function growTrees(seedStr) {
   const rng = new RNG(seedStr).fork('tree');
   const group = new THREE.Group();
@@ -439,6 +468,9 @@ function buildList() {
       list.appendChild(listItem(BLOCKS[id].name, B_NAME[id].toLowerCase(), () => select(String(id)), activeKey === String(id)));
     for (const [key, name] of LITTER)
       list.appendChild(listItem(name, 'ground litter', () => select('litter:' + key), activeKey === 'litter:' + key));
+  } else if (activeCat === 'tools') {
+    for (const e of TOOL_ENTRIES)
+      list.appendChild(listItem(e.name, ITEMS[e.key].tool, () => select(e.key), activeKey === e.key));
   } else if (activeCat === 'items') {
     for (const k of Object.keys(ITEMS))
       list.appendChild(listItem(ITEMS[k].name, ITEMS[k].tool || '', () => select(k), activeKey === k));
@@ -488,6 +520,7 @@ function selectCat(cat) {
   if (cat === 'machines') select(MACHINE_ENTRIES[0].key);
   else if (cat === 'infected') select(Object.keys(STRAINS)[0]);
   else if (cat === 'blocks') select(String(B.GRASS));
+  else if (cat === 'tools') select(TOOL_ENTRIES[0].key);
   else if (cat === 'items') { buildIconGrid(); select(Object.keys(ITEMS)[0]); }
   else if (cat === 'trees') select('trees');
   else if (cat === 'atmosphere') select('noon');
@@ -499,6 +532,7 @@ function select(key) {
   else if (activeCat === 'infected') showStrain(key);
   else if (activeCat === 'blocks' && key.startsWith('litter:')) showLitter(key.slice(7));
   else if (activeCat === 'blocks') showBlock(Number(key));
+  else if (activeCat === 'tools') showTool(TOOL_ENTRIES.find(e => e.key === key));
   else if (activeCat === 'items') {
     const def = itemDef(key);
     setCard('FIELD KIT RECORD', def.name, def.desc || '', itemStats(def));

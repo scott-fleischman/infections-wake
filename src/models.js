@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { B, BLOCKS, STRAINS } from './config.js';
+import { B, BLOCKS, STRAINS, ITEMS } from './config.js';
 import { getBlockAtlas } from './textures.js';
 
 // ============================================================================
@@ -57,6 +57,13 @@ function ud(g) {
   g.userData.pulse = g.userData.pulse || [];
   return g.userData;
 }
+
+// Limb capture for the walk cycle. Each strain authors its legs/arms with a
+// rest pose (some lean forward, some coil); we record that rest angle so the
+// animation can swing AROUND it instead of snapping every body upright the
+// first time it takes a step. Capture must happen AFTER any rotation.x is
+// assigned, or the authored lean is silently thrown away.
+function limbRec(mesh) { return { mesh, rest: mesh.rotation.x }; }
 
 // ---------------------------------------------------------------------------
 // Machines & structures
@@ -576,6 +583,13 @@ export function buildInfectedMesh(strainKey) {
   const s = STRAINS[strainKey];
   const g = new THREE.Group();
   const mats = [];
+  // LEG/ARM are pass-through wrappers: they record the limb for the walk cycle
+  // and hand the mesh straight back, so child ORDER is untouched. That matters
+  // because colony_host and kiln_host pick their head out of g.children by
+  // index — re-adding or reparenting a leg here would grab the wrong mesh.
+  const limbs = { legs: [], arms: [] };
+  const LEG = (m) => { limbs.legs.push(limbRec(m)); return m; };
+  const ARM = (m) => { limbs.arms.push(limbRec(m)); return m; };
   const M = (c) => { const m = lambert(c); mats.push(m); return m; };
   const col = new THREE.Color(s.color);
   const dark = col.clone().offsetHSL(0, 0, -0.09).getHex();
@@ -587,23 +601,25 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) {
       const leg = box(g, 0.1, 0.62, 0.1, M(dark), sx * 0.1, 0.31, -0.02);
       leg.rotation.x = -0.12;
+      LEG(leg);
     }
     const torso = box(g, 0.34, 0.56, 0.22, M(s.color), 0, 0.84, 0.08);
     torso.rotation.x = 0.55;                                   // deep forward lean
     for (const sx of [-1, 1]) {
       const arm = box(g, 0.08, 0.5, 0.08, M(dark), sx * 0.24, 0.72, 0.3);
       arm.rotation.x = 0.8;
+      ARM(arm);
     }
     head = box(g, 0.24, 0.22, 0.3, M(darker), 0, 1.08, 0.34);
     box(g, 0.18, 0.08, 0.22, M(dark), 0, 0.96, 0.4);           // jaw
     for (const sx of [-1, 1]) box(g, 0.06, 0.045, 0.02, eyeMat, sx * 0.06, 1.1, 0.5);
   } else if (strainKey === 'machine_eater') {
-    for (const sx of [-1, 1]) box(g, 0.16, 0.42, 0.16, M(dark), sx * 0.17, 0.21, 0);
+    for (const sx of [-1, 1]) LEG(box(g, 0.16, 0.42, 0.16, M(dark), sx * 0.17, 0.21, 0));
     box(g, 0.66, 0.6, 0.46, M(s.color), 0, 0.72, 0);           // bulk torso
     box(g, 0.5, 0.3, 0.34, M(darker), 0, 1.06, -0.12);         // back hump
     for (const sx of [-1, 1]) {
-      box(g, 0.2, 0.28, 0.08, M(0x3a3a44), sx * 0.36, 0.96, 0.06); // shoulder plate
-      box(g, 0.15, 0.58, 0.15, M(dark), sx * 0.44, 0.62, 0.04);    // heavy arm
+      box(g, 0.2, 0.28, 0.08, M(0x3a3a44), sx * 0.36, 0.96, 0.06);      // shoulder plate (rigid)
+      ARM(box(g, 0.15, 0.58, 0.15, M(dark), sx * 0.44, 0.62, 0.04));    // heavy arm
     }
     head = box(g, 0.3, 0.26, 0.3, M(darker), 0, 1.14, 0.16);
     for (const sx of [-1, 1]) {                                // mandibles
@@ -618,7 +634,7 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) box(g, 0.06, 0.045, 0.02, eyeMat, sx * 0.08, 1.16, 0.32);
   } else if (strainKey === 'colony_host') {
     for (const sx of [-1, 1]) for (const sz of [-1, 1])
-      box(g, 0.2, 0.3, 0.2, M(darker), sx * 0.3, 0.15, sz * 0.22);   // stumpy legs
+      LEG(box(g, 0.2, 0.3, 0.2, M(darker), sx * 0.3, 0.15, sz * 0.22)); // stumpy legs (no arms)
     box(g, 0.92, 0.9, 0.76, M(s.color), 0, 0.68, 0);                 // main mass
     box(g, 0.5, 0.5, 0.5, M(dark), 0.34, 1.12, 0.06);                // fused lump
     box(g, 0.46, 0.4, 0.5, M(darker), -0.32, 1.0, -0.14);            // fused lump
@@ -638,13 +654,14 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) box(g, 0.09, 0.06, 0.02, eyeMat, sx * 0.15, 0.92, 0.39);
   } else if (strainKey === 'brute') {
     // massive mineralized frame, knuckle-walker arms, head sunk in shoulders
-    for (const sx of [-1, 1]) box(g, 0.22, 0.4, 0.22, M(darker), sx * 0.22, 0.2, 0);
+    for (const sx of [-1, 1]) LEG(box(g, 0.22, 0.4, 0.22, M(darker), sx * 0.22, 0.2, 0));
     box(g, 0.86, 0.7, 0.6, M(s.color), 0, 0.85, 0);                          // mass
     box(g, 0.5, 0.34, 0.4, M(0x7a6a4a), 0.24, 1.22, -0.1);                   // stone plate A
     box(g, 0.4, 0.26, 0.34, M(0x63543a), -0.3, 1.14, 0.08);                  // stone plate B (asymmetric)
     for (const sx of [-1, 1]) {
       const arm = box(g, 0.2, 0.8, 0.2, M(dark), sx * 0.52, 0.5, 0.16);      // knuckle arms
       arm.rotation.x = 0.15;
+      ARM(arm);
       box(g, 0.24, 0.16, 0.24, M(darker), sx * 0.54, 0.1, 0.28);             // knuckles down
     }
     head = box(g, 0.26, 0.2, 0.26, M(darker), 0, 1.28, 0.2);                 // tiny sunk head
@@ -654,12 +671,14 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) {
       const leg = box(g, 0.08, 0.7, 0.08, M(dark), sx * 0.14, 0.35, 0.06);
       leg.rotation.x = -0.3;                                                 // coiled
+      LEG(leg);
     }
     const torso = box(g, 0.3, 0.5, 0.2, M(s.color), 0, 0.78, 0.1);
     torso.rotation.x = 0.7;                                                  // deep crouch
     for (const sx of [-1, 1]) {
       const arm = box(g, 0.07, 0.72, 0.07, M(dark), sx * 0.22, 0.86, 0.3);
       arm.rotation.x = 1.1;                                                  // reaching up-forward
+      ARM(arm);
       for (let f = 0; f < 3; f++) {                                          // splayed hooks
         const hook = cone(g, 0.02, 0.1, M(darker), sx * (0.18 + f * 0.05), 1.18, 0.62);
         hook.rotation.x = 1.2;
@@ -671,7 +690,7 @@ export function buildInfectedMesh(strainKey) {
   } else if (strainKey === 'burrower') {
     // low quadruped wedge, soil-crusted plates, shovel claws, NO eyes
     for (const sx of [-1, 1]) for (const sz of [-1, 1])
-      box(g, 0.14, 0.26, 0.14, M(dark), sx * 0.24, 0.13, sz * 0.26);
+      LEG(box(g, 0.14, 0.26, 0.14, M(dark), sx * 0.24, 0.13, sz * 0.26));
     const wedge = box(g, 0.6, 0.4, 0.9, M(s.color), 0, 0.42, 0);             // body wedge
     wedge.rotation.x = -0.1;                                                 // nose down
     box(g, 0.5, 0.14, 0.5, M(0x54432a), 0, 0.66, -0.14);                     // soil-crusted plate
@@ -679,13 +698,14 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) {                                              // shovel claws
       const claw = box(g, 0.2, 0.1, 0.3, M(darker), sx * 0.3, 0.16, 0.5);
       claw.rotation.x = 0.5;
+      ARM(claw);                     // the burrower's only forelimbs — they dig and swipe
     }
     head = box(g, 0.3, 0.22, 0.24, M(darker), 0, 0.4, 0.48);                 // blind snout
     for (let i = 0; i < 4; i++)                                              // sensor bristles, no eyes
       cyl(g, 0.008, 0.008, 0.16, M(dark), -0.09 + i * 0.06, 0.52, 0.58).rotation.x = 0.8;
   } else if (strainKey === 'cyst_carrier') {
     // swollen torso of clustered spore spheres on spindly legs
-    for (const sx of [-1, 1]) box(g, 0.07, 0.6, 0.07, M(dark), sx * 0.12, 0.3, 0);
+    for (const sx of [-1, 1]) LEG(box(g, 0.07, 0.6, 0.07, M(dark), sx * 0.12, 0.3, 0)); // spindly legs (no arms)
     box(g, 0.34, 0.4, 0.26, M(darker), 0, 0.74, 0);                          // core
     for (let i = 0; i < 7; i++) {                                            // spore cluster
       const r2 = 0.12 + (i % 3) * 0.035;
@@ -703,6 +723,7 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) {
       const leg = box(g, 0.11, 0.5, 0.11, M(dark), sx * 0.13, 0.25, 0.05);
       leg.rotation.x = 0.15;
+      LEG(leg);
     }
     const torso = box(g, 0.4, 0.56, 0.28, M(s.color), 0, 0.8, -0.06);
     torso.rotation.x = -0.35;                                                // reared BACK
@@ -713,6 +734,7 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) {
       const arm = box(g, 0.08, 0.4, 0.08, M(dark), sx * 0.26, 0.72, 0.02);
       arm.rotation.x = 0.4;
+      ARM(arm);
     }
     head = box(g, 0.24, 0.22, 0.26, M(darker), 0, 1.24, 0.1);
     head.rotation.x = -0.4;                                                  // face lifted to lob
@@ -723,6 +745,7 @@ export function buildInfectedMesh(strainKey) {
     for (const sx of [-1, 1]) {
       const leg = box(g, 0.12, 0.66, 0.12, M(dark), sx * 0.12, 0.33, -0.02);
       leg.rotation.x = -0.1;
+      LEG(leg);
     }
     const torso = box(g, 0.4, 0.6, 0.26, M(s.color), 0, 0.88, 0.06);
     torso.rotation.x = 0.4;                                                  // runner lean
@@ -730,6 +753,7 @@ export function buildInfectedMesh(strainKey) {
       box(g, 0.22, 0.3, 0.1, M(0x3a3a44), sx * 0.28, 1.06, 0.02);            // shoulder plates
       const arm = box(g, 0.09, 0.6, 0.09, M(dark), sx * 0.28, 0.72, 0.26);
       arm.rotation.x = 0.7;
+      ARM(arm);
       for (let f = 0; f < 2; f++) {                                          // climber hooks
         const hook = cone(g, 0.02, 0.09, M(darker), sx * (0.24 + f * 0.06), 0.44, 0.5);
         hook.rotation.x = 1.4;
@@ -742,7 +766,7 @@ export function buildInfectedMesh(strainKey) {
   } else if (strainKey === 'kiln_host') {
     // brute-scale mass fused with brick and steel, internal fire seams
     for (const sx of [-1, 1]) for (const sz of [-1, 1])
-      box(g, 0.22, 0.32, 0.22, M(darker), sx * 0.3, 0.16, sz * 0.24);
+      LEG(box(g, 0.22, 0.32, 0.22, M(darker), sx * 0.3, 0.16, sz * 0.24));   // four squat legs (no arms)
     box(g, 0.94, 0.84, 0.74, M(s.color), 0, 0.72, 0);                        // mass
     box(g, 0.44, 0.44, 0.44, M(0x5a3e30), 0.32, 1.1, 0.1);                   // fused brick
     box(g, 0.4, 0.3, 0.36, M(0x3a4048), -0.34, 1.02, -0.12);                 // fused steel
@@ -769,6 +793,7 @@ export function buildInfectedMesh(strainKey) {
     for (let i = 0; i < 5; i++) {                                            // dripping tendrils
       const t2 = box(g, 0.045, 0.34 + (i % 3) * 0.1, 0.045, M(darker), -0.3 + i * 0.15, 0.14, 0.34);
       t2.rotation.x = 0.12;
+      LEG(t2);         // this mass has no legs — the tendril fringe is what drags it along
     }
     for (let i = 0; i < 4; i++) {                                            // cyan pustules
       const pu = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5),
@@ -780,21 +805,30 @@ export function buildInfectedMesh(strainKey) {
     head = box(g, 0.24, 0.2, 0.24, M(darker), 0, 1.2, 0.14);
     for (const sx of [-1, 1]) box(g, 0.06, 0.04, 0.02, eyeMat, sx * 0.06, 1.2, 0.27);
   } else { // drifter (default silhouette)
-    for (const sx of [-1, 1]) box(g, 0.14, 0.5, 0.14, M(dark), sx * 0.12, 0.25, 0);
+    for (const sx of [-1, 1]) LEG(box(g, 0.14, 0.5, 0.14, M(dark), sx * 0.12, 0.25, 0));
     const torso = box(g, 0.5, 0.6, 0.32, M(s.color), 0, 0.78, 0.02);
     torso.rotation.x = 0.24;                                   // hunch
     for (const sx of [-1, 1]) {
       const arm = box(g, 0.11, 0.6, 0.11, M(dark), sx * 0.33, 0.62, 0.12);
       arm.rotation.x = 0.35;
+      ARM(arm);
     }
     head = box(g, 0.34, 0.3, 0.34, M(darker), 0, 1.14, 0.16);
     head.rotation.x = 0.28;                                    // drooped
     for (const sx of [-1, 1]) box(g, 0.07, 0.05, 0.02, eyeMat, sx * 0.08, 1.12, 0.34);
   }
 
+  // Every body needs something to swing. A silhouette authored with no legs at
+  // all borrows its two lowest meshes so the walk cycle is never a silent
+  // no-op — a strain added later without a LEG() wrap still shambles.
+  if (limbs.legs.length < 2) {
+    const low = g.children.filter(c => c.isMesh).sort((a, b) => a.position.y - b.position.y).slice(0, 2);
+    for (const m of low) limbs.legs.push(limbRec(m));
+  }
+
   g.scale.setScalar(s.scale);
   ud(g);
-  return { group: g, head, mats };
+  return { group: g, head, mats, limbs };
 }
 
 // ---------------------------------------------------------------------------
@@ -862,6 +896,22 @@ export function buildGroundItem(itemId, seed = 0) {
   if (itemId === 'stick') return buildSticks(seed);
   if (itemId === 'stone_shard') return buildStones(seed);
   if (itemId === 'fiber') return buildFiberTuft(seed);
+  // A dropped tool lies on its side where it fell, using the SAME model the
+  // hand and the gallery show — a pick on the floor must read as the pick you
+  // are about to pick up. main.js marks these `grounded` and places the origin
+  // exactly on the surface, so settle the laid-flat tool to rest on y = 0
+  // instead of letting a wide shovel blade sink half into the dirt.
+  const tool = buildToolMesh(itemId);
+  if (tool) {
+    const g = new THREE.Group();
+    tool.rotation.z = Math.PI / 2;            // haft axis swings down to horizontal
+    tool.rotation.y = (seed % 7) * 0.4;       // deterministic scatter of which way it points
+    tool.updateMatrixWorld(true);
+    const lie = new THREE.Box3().setFromObject(tool);
+    tool.position.y = 0.015 - lie.min.y;      // rest on the ground, a hair proud of it
+    g.add(tool);
+    return g;
+  }
   return null;
 }
 
@@ -915,6 +965,111 @@ export function buildBlockMesh(id) {
     }
   }
   return g;
+}
+
+// ---------------------------------------------------------------------------
+// Tools & weapons — one model per tool item, shared by the first-person
+// viewmodel, ground drops and the gallery. Origin is the BUTT OF THE HAFT with
+// the tool pointing +Y and the working face toward +Z, so a hand grips at
+// (0,0,0) and the head reads forward. Nothing may hang below y = 0: the
+// viewmodel grips at the origin and a drop settles its bounds onto the floor.
+// ---------------------------------------------------------------------------
+
+// `top` is the y of the haft tip — every head is authored relative to it so the
+// same shapes sit correctly on a short hilt (blade) or a long shaft (spear).
+function buildToolHead(g, kind, metal, dark, top) {
+  if (kind === 'pick') {
+    // one bar running fore-and-aft, tipped down at the front, with a point on
+    // each end. That fore/aft span is the whole reason a pick reads as a pick.
+    const head = box(g, 0.07, 0.07, 0.62, metal, 0, top, 0);
+    head.rotation.x = 0.16;                              // front end noses down
+    box(g, 0.075, 0.09, 0.1, dark, 0, top, 0);           // eye/collar over the haft
+    const t1 = cone(g, 0.05, 0.13, metal, 0, top - 0.06, 0.37, 4);
+    t1.rotation.x = Math.PI / 2 + 0.16;                  // forward point, on the bar's axis
+    const t2 = cone(g, 0.05, 0.13, metal, 0, top + 0.06, -0.37, 4);
+    t2.rotation.x = -Math.PI / 2 + 0.16;                 // rear point
+  } else if (kind === 'axe') {
+    // mass all on one side: a deep bit that flares into a cutting edge, with a
+    // stubby poll behind it for balance. Thin in x so the edge reads sharp.
+    box(g, 0.075, 0.1, 0.1, dark, 0, top, 0);            // collar
+    const bit = box(g, 0.05, 0.3, 0.3, metal, 0, top - 0.02, 0.19);
+    bit.rotation.x = 0.1;
+    const edge = box(g, 0.03, 0.34, 0.07, metal, 0, top - 0.02, 0.35);
+    edge.rotation.x = 0.1;                               // flared cutting edge
+    box(g, 0.05, 0.12, 0.1, metal, 0, top + 0.02, -0.1); // poll
+  } else if (kind === 'shovel') {
+    // a wide, flat spade on the end of the shaft — width is the silhouette cue
+    box(g, 0.075, 0.09, 0.09, dark, 0, top, 0);          // socket
+    const blade = box(g, 0.28, 0.32, 0.035, metal, 0, top + 0.14, 0.02);
+    blade.rotation.x = -0.08;
+    const tip = box(g, 0.22, 0.09, 0.03, metal, 0, top + 0.31, 0.03);
+    tip.rotation.x = -0.08;                              // narrowed digging lip
+  } else { // sword / spear
+    // cross guard, long flat blade, point. On a spear the same head rides a
+    // much longer haft, which is what separates the two at a glance.
+    box(g, 0.13, 0.05, 0.05, dark, 0, top, 0);           // cross guard
+    box(g, 0.085, 0.52, 0.028, metal, 0, top + 0.28, 0); // blade
+    cone(g, 0.045, 0.14, metal, 0, top + 0.6, 0, 4);     // point
+  }
+}
+
+export function buildToolMesh(itemId) {
+  const def = ITEMS[itemId];
+  if (!def || !def.tool) return null;
+  const g = new THREE.Group();
+  const metal = lambert(def.color ?? 0x8a8f96);
+  const dark = lambert(new THREE.Color(def.color ?? 0x8a8f96).offsetHSL(0, 0, -0.14).getHex());
+  const haft = lambert(P.woodDark);
+  const grip = lambert(0x4a3a24);
+  // spears run long and thin; blades keep a short hilt; diggers sit in between
+  const len = def.tool === 'sword' ? (itemId === 'stone_spear' ? 0.78 : 0.3) : 0.56;
+  cyl(g, 0.026, 0.032, len, haft, 0, len / 2, 0, 6);     // haft, butt at the origin
+  cyl(g, 0.034, 0.034, 0.12, grip, 0, 0.07, 0, 6);       // wrapped grip where the hand closes
+  box(g, 0.06, 0.035, 0.06, dark, 0, 0.018, 0);          // butt cap — stops the hand sliding off
+  buildToolHead(g, def.tool, metal, dark, len);
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// The player's own body. Rendered in the WORLD scene at the player's feet, with
+// the head and arms hidden in first person — that is what makes looking down
+// show your legs and torso instead of empty air. Origin: centre-bottom, so the
+// group can be dropped straight onto player.pos.
+// ---------------------------------------------------------------------------
+
+export function buildPlayerMesh() {
+  const g = new THREE.Group();
+  const coat = lambert(0x4a5240);       // field jacket
+  const coatDark = lambert(0x3a4132);
+  const trouser = lambert(0x3d3a34);
+  const boot = lambert(0x241f1a);
+  const skin = lambert(0x8a6a52);
+  const limbs = { legs: [], arms: [] };
+
+  for (const sx of [-1, 1]) {
+    const leg = box(g, 0.15, 0.72, 0.17, trouser, sx * 0.11, 0.4, 0);
+    limbs.legs.push(limbRec(leg));
+    box(g, 0.17, 0.1, 0.22, boot, sx * 0.11, 0.05, 0.02);
+  }
+  // Hold the torso in a local: main.js addresses parts.torso directly, and a
+  // hard-coded child index silently grabs the wrong mesh the moment anyone
+  // inserts a strap or a pocket above it.
+  const torso = box(g, 0.42, 0.6, 0.24, coat, 0, 1.06, 0);
+  box(g, 0.44, 0.12, 0.26, coatDark, 0, 1.3, 0);        // shoulder yoke
+  box(g, 0.2, 0.22, 0.12, coatDark, 0, 0.95, 0.15);     // chest pouch
+  const arms = [];
+  for (const sx of [-1, 1]) {
+    const arm = box(g, 0.12, 0.54, 0.14, coat, sx * 0.27, 1.05, 0);
+    limbs.arms.push(limbRec(arm));
+    arms.push(arm);
+    box(g, 0.12, 0.1, 0.14, skin, sx * 0.27, 0.75, 0);  // hand
+  }
+  // The head centre sits under PLAYER.eye (1.55) so that even before first
+  // person hides it, it never balloons across the whole viewport.
+  const head = box(g, 0.26, 0.26, 0.26, skin, 0, 1.49, 0);
+  box(g, 0.28, 0.1, 0.28, coatDark, 0, 1.62, 0);        // cap
+
+  return { group: g, parts: { head, arms, torso }, limbs };
 }
 
 // ---------------------------------------------------------------------------

@@ -59,22 +59,59 @@ test('unknown scenario key is rejected', () => {
   assert.equal(applyScenario(game, 'nope'), false);
 });
 
-test('fortified hangs a real door in the shack doorway', () => {
+// The regression these two guard: placeStartRefuge grew the shack from 5x5 to
+// 9x9 and scenarios.js kept its hard-coded 5x5 offsets, so "sealed" scenarios
+// hung a door in the middle of the room and left the real doorway wide open.
+// Both tests therefore derive everything from poi.spawn and assert the shape of
+// the shack, never a copied literal.
+
+test('fortified genuinely seals the shack — no gap left in the wall ring', () => {
   const game = makeScenarioGame('scn-door');
   applyScenario(game, 'fortified');
   const s = game.world.poi.spawn;
-  const sx = Math.floor(s.x), surf = s.y - 1, z0 = Math.floor(s.z) - 2;
-  assert.equal(game.world.get(sx, surf + 1, z0), B.DOOR, 'door fills the doorway');
-  assert.equal(game.world.get(sx, surf + 2, z0), B.DOOR_TOP, 'and stands two cells tall');
+  const sx = Math.floor(s.x), sz = Math.floor(s.z), surf = s.y - 1;
+  const x0 = sx - 4, z0 = sz - 4, x1 = sx + 4, z1 = sz + 4;
+
+  // both columns of the 2-wide doorway carry a full-height door
+  for (const dx of [0, 1]) {
+    assert.equal(game.world.get(sx + dx, surf + 1, z0), B.DOOR, `door fills doorway column ${dx}`);
+    assert.equal(game.world.get(sx + dx, surf + 2, z0), B.DOOR_TOP, `column ${dx} stands two cells tall`);
+  }
+  // the collapsed SE corner is timbered back up to the wall top
+  assert.equal(game.world.get(x1, surf + 4, z1), B.WOOD_WALL, 'collapsed corner repaired to full height');
+
+  // The whole invariant: after sealing, the only air left in the wall ring is
+  // the west window slot worldgen deliberately carves at (x0, surf+2, sz-1..+1).
+  const leaks = [];
+  for (let x = x0; x <= x1; x++)
+    for (let z = z0; z <= z1; z++) {
+      if (!(x === x0 || x === x1 || z === z0 || z === z1)) continue;   // interior
+      for (let y = surf + 1; y <= surf + 4; y++) {
+        if (game.world.get(x, y, z) !== B.AIR) continue;
+        const isWindow = x === x0 && y === surf + 2 && Math.abs(z - sz) <= 1;
+        if (!isWindow) leaks.push(`(${x - sx},${y - surf},${z - sz})`);
+      }
+    }
+  assert.deepEqual(leaks, [], `wall ring still open at ${leaks.join(' ')}`);
   assert.ok(game.unlocks.doorHung, 'door objective satisfied');
 });
 
 test('powered scenario wires a generator network outside the shack', () => {
   const game = makeScenarioGame('scn-power');
   applyScenario(game, 'powered');
+  const s = game.world.poi.spawn;
+  const sx = Math.floor(s.x), sz = Math.floor(s.z);
   const ids = game.placed.map(p => p.id);
-  for (const want of [B.GENERATOR, B.WIRE, B.LAMP, B.TURRET, B.BEACON])
-    assert.ok(ids.includes(want), `placed block ${want}`);
+  const spine = new Set([B.GENERATOR, B.WIRE, B.LAMP, B.TURRET, B.BEACON]);
+  for (const want of spine) assert.ok(ids.includes(want), `placed block ${want}`);
+  // "outside the shack" is the point of the scenario, not decoration: a turret
+  // behind timber never clears power.js's wallAtten gate, so it cannot fire on
+  // anything it is supposed to be guarding. The wall ring sits at sx/sz ± 4.
+  for (const p of game.placed) {
+    if (!spine.has(p.id)) continue;
+    const cheb = Math.max(Math.abs(p.x - sx), Math.abs(p.z - sz));
+    assert.ok(cheb > 4, `${BLOCKS[p.id].name} at (${p.x - sx},${p.z - sz}) is inside the shack`);
+  }
   assert.ok(game.unlocks.genRan, 'generator objective pre-satisfied');
 });
 

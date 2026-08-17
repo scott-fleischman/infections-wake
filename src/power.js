@@ -377,8 +377,10 @@ export class Machines {
       if (this.game.sig.wallAtten(origin.x, origin.y, origin.z, inf.pos.x, inf.pos.y + 0.8, inf.pos.z) < 0.95) continue;
       inf.takeHit(cfg.dps * dt, true, { x: m.x, y: m.y, z: m.z }); // burned → attack the burner (§12.3)
       // ticks every frame — only nudge once the last shove has mostly decayed,
-      // or a continuous beam would stunlock the target in place
-      if (inf.kb.lengthSq() < 0.4) inf.applyKnockback?.({ x: m.x, z: m.z }, cfg.kb);
+      // or a continuous beam would stunlock the target in place. { stun: false }
+      // keeps the beam a wiggle: a continuous source must never open the
+      // stagger window, or the body would be frozen for as long as it burns.
+      if (inf.kb.lengthSq() < 0.4) inf.applyKnockback?.({ x: m.x, z: m.z }, cfg.kb, { stun: false });
     }
     // erode one cyst film block at a time within range
     m.cystT -= dt;

@@ -23,16 +23,20 @@ export class Infected {
     this.flickerT = 0;
     this.facing = Math.random() * Math.PI * 2;
     this.kb = new THREE.Vector3();   // transient knockback shove (not serialized)
+    this.stunT = 0;                  // stagger window: no walking/chewing/attacking
+    this.flinchT = 0;                // visual recoil timer (syncMesh only)
+    this.walkPhase = Math.random() * 6.28; // limb swing phase, desynced per body
     this.buildMesh();
   }
 
   buildMesh() {
     // distinct per-strain silhouette (models.js — shared with the gallery)
-    const { group, head, mats } = buildInfectedMesh(this.strainKey);
+    const { group, head, mats, limbs } = buildInfectedMesh(this.strainKey);
     this.mesh = group;
     this.headMesh = head;
     this.bodyMats = mats;
     this.bodyMat = mats[0];
+    this.limbs = limbs;              // { legs, arms } — swung by syncMesh
     group.traverse(o => { if (o.isMesh) o.castShadow = true; });
     this.game.scene.add(group);
   }
@@ -117,10 +121,29 @@ export class Infected {
 
     // knockback shove FIRST — it must interrupt chewing/spitting, not queue
     // behind their early returns. Decays fast, respects collision, and never
-    // triggers block attacks (noAttack).
-    if (this.kb.lengthSq() > 0.02) {
-      this.tryMove(this.kb.x * dt, this.kb.z * dt, true);
+    // triggers block attacks (noAttack). Below kbCutoff the shove is over: we
+    // zero it so the travelled distance lands on the configured value instead
+    // of trailing off in an infinitely long exponential tail.
+    if (this.kb.lengthSq() > COMBAT.kbCutoff * COMBAT.kbCutoff) {
+      // Sub-step: tryMove only samples the DESTINATION cell, so one big hop
+      // would teleport a hard-flung body clean through a one-block wall. Hops
+      // under a block can never skip a cell. A normal shove (0.5 blocks over
+      // 0.3s) is a single step, so this costs nothing in the common case.
+      const sx = this.kb.x * dt, sz = this.kb.z * dt;
+      const steps = Math.min(16, Math.max(1, Math.ceil(Math.hypot(sx, sz) / 0.5)));
+      for (let i = 0; i < steps; i++) this.tryMove(sx / steps, sz / steps, true);
       this.kb.multiplyScalar(Math.max(0, 1 - COMBAT.kbDecay * dt));
+    } else if (this.kb.lengthSq() > 0) this.kb.set(0, 0, 0);
+
+    // Staggered: the body is along for the ride. It does not walk, chew, spit
+    // or swing until the window closes — this is what makes the shove read as
+    // "it got knocked back" instead of "it kept coming". Without it a runner
+    // (speed 4.4) simply out-walked its own shove and CLOSED distance.
+    if (this.stunT > 0) {
+      this.stunT = Math.max(0, this.stunT - dt);
+      this.applyGravity(dt);
+      this.syncMesh(dt);
+      return;
     }
 
     // §12.3 #4: retaliate against a defensive system that just hurt it
@@ -251,7 +274,15 @@ export class Infected {
     // climbers cling briefly after leaving a face; everyone else falls hard
     if (this.climbingT > 0) this.climbingT -= dt;
 
-    // gravity clamp to ground (skipped on a frame spent actively climbing)
+    this.applyGravity(dt);
+
+    this.syncMesh(dt);
+  }
+
+  // Gravity clamp to ground (skipped on a frame spent actively climbing).
+  // Extracted so the stagger early-return can still ride terrain: a body shoved
+  // off a ledge has to fall, even while it is too stunned to walk.
+  applyGravity(dt) {
     if (!this._climbedNow) {
       const gy = this.groundY(this.pos.x, this.pos.z);
       if (this.pos.y > gy + 0.1) {
@@ -260,8 +291,6 @@ export class Infected {
       } else this.pos.y = gy;
     }
     this._climbedNow = false;
-
-    this.syncMesh(dt);
   }
 
   // Is this block soft ground a burrower can push through (§12.2)?
@@ -311,14 +340,20 @@ export class Infected {
     }
   }
 
-  // Melee shove away from `fromPos`. Heavier frames resist; encounter bosses
-  // are immune (a jugglable colony host trivializes the fight).
-  applyKnockback(fromPos, power) {
+  // Shove away from `fromPos` by `dist` BLOCKS. The impulse is dist * kbDecay
+  // because the integral of v0*e^(-decay*t) is v0/decay, so that starting speed
+  // is exactly what carries a body the configured distance. Heavier frames
+  // resist by scale, NOT scale² — a brute must still visibly move. A full shove
+  // also opens the stagger window; continuous sources (UV, spike traps) pass
+  // { stun: false } so they wiggle a body without ever stunlocking it.
+  // Encounter bosses are immune (a jugglable colony host trivializes the fight).
+  applyKnockback(fromPos, dist, opts = {}) {
     if (this.s.boss || this.isFalse) return;
     const dx = this.pos.x - fromPos.x, dz = this.pos.z - fromPos.z;
     const len = Math.hypot(dx, dz) || 1;
-    const p = power / (this.s.scale * this.s.scale);
-    this.kb.set(dx / len * p, 0, dz / len * p);
+    const v0 = (dist * COMBAT.kbDecay) / this.s.scale;
+    this.kb.set(dx / len * v0, 0, dz / len * v0);
+    if (opts.stun !== false) this.stunT = COMBAT.kbStun;
   }
 
   updateFalse(dt) {
@@ -350,6 +385,47 @@ export class Infected {
     while (d < -Math.PI) d += Math.PI * 2;
     this.mesh.rotation.y += d * Math.min(1, 10 * dt);
     if (this.lunge > 0) { this.lunge -= dt; this.mesh.position.y += 0.1; }
+
+    // ---- walk cycle: legs counter-swing, arms mirror them ----
+    // Phase advances with the ground ACTUALLY covered, not with dt. A body
+    // shoved against a wall or standing still therefore stops stepping instead
+    // of moon-walking on the spot, and a runner's legs churn faster than a
+    // brute's for free. A staggered body is still sliding, so its legs scrabble
+    // through a fraction of a step — which is what a shove should look like.
+    const moved = Math.hypot(this.pos.x - (this._lastX ?? this.pos.x), this.pos.z - (this._lastZ ?? this.pos.z));
+    this._lastX = this.pos.x; this._lastZ = this.pos.z;
+    this.walkPhase += moved * 5.5;
+    const swing = Math.sin(this.walkPhase) * 0.5;
+    const lunging = this.lunge > 0;
+    if (this.limbs) {
+      // legs alternate around their AUTHORED rest angle (some strains lean
+      // forward), so animating never snaps a crouched silhouette upright
+      const legs = this.limbs.legs;
+      for (let i = 0; i < legs.length; i++)
+        legs[i].mesh.rotation.x = legs[i].rest + swing * (i % 2 === 0 ? 1 : -1);
+      const arms = this.limbs.arms;
+      for (let i = 0; i < arms.length; i++) {
+        // a lunging body throws BOTH arms forward — that read is the tell that
+        // a hit just landed; otherwise they counter the legs at reduced travel
+        arms[i].mesh.rotation.x = lunging
+          ? arms[i].rest - 1.1
+          : arms[i].rest - swing * (i % 2 === 0 ? 1 : -1) * 0.7;
+      }
+    }
+
+    // ---- hit flinch: recoil away from the facing + a brief swell ----
+    // Purely visual and applied AFTER position.copy(this.pos), so it never
+    // desynchronizes the simulation from what the player sees hit-boxed.
+    if (this.flinchT > 0) {
+      this.flinchT = Math.max(0, this.flinchT - dt);
+      const k = this.flinchT / COMBAT.flinchT;
+      this.mesh.position.x -= Math.sin(this.facing) * 0.14 * k;
+      this.mesh.position.z -= Math.cos(this.facing) * 0.14 * k;
+      this.mesh.scale.setScalar(this.s.scale * (1 + 0.09 * k));
+    } else if (this.mesh.scale.x !== this.s.scale) {
+      this.mesh.scale.setScalar(this.s.scale);
+    }
+
     // §5.5 early cue: while the body idles, the head still tracks the stimulus
     if (this.headMesh && this.target && this.state !== 'wander') {
       const want = Math.atan2(this.target.x - this.pos.x, this.target.z - this.pos.z) - this.mesh.rotation.y;
@@ -368,6 +444,7 @@ export class Infected {
     }
     this.hp -= dmg;
     this.flash();
+    this.flinchT = COMBAT.flinchT;   // visual recoil (syncMesh); re-armed on every hit
     this.game.sig.addBlood(this.pos.x, this.pos.y + 0.5, this.pos.z, 0.4);
     if (source && this.s.targetsMachines) {
       // §12.3 #4: hit by a defensive system — turn on the machine, not the
@@ -394,6 +471,12 @@ export class Infected {
   }
 
   die() {
+    // The gore spray is emitted by onInfectedKilled() in main.js, NOT here.
+    // Both hooks once fired burstDeath, which doubled every death to 64
+    // particles — an eighth of the whole 512 pool per kill, so a swarm fight
+    // evicted still-flying block shards. onInfectedKilled is the one canonical
+    // kill hook (this is its only caller), so the emission lives there beside
+    // the other burst* calls.
     this.game.onInfectedKilled(this);
     this.game.sig.addBlood(this.pos.x, this.pos.y + 0.3, this.pos.z, 1.2);
     // a carrier bursts: the film it dies in keeps working (§12.2)

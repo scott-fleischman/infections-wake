@@ -9,7 +9,7 @@ import { InfectedManager } from './infected.js';
 import { Machines } from './power.js';
 import { Props } from './props.js';
 import { doorParts, bedParts, bedHeadFor, yawToCardinal, upgradeEditsPlan, MULTI_IDS } from './multiblock.js';
-import { buildGroundItem, buildBlockMesh, buildProp, disposeGroup } from './models.js';
+import { buildGroundItem, buildBlockMesh, buildProp, buildPlayerMesh, disposeGroup } from './models.js';
 import { makeIcon } from './icons.js';
 import { Director } from './director.js';
 import { Sanity } from './sanity.js';
@@ -22,6 +22,8 @@ import { LightPool } from './light.js';
 import { SaveStore } from './save.js';
 import { SCENARIOS, applyScenario } from './scenarios.js';
 import { Sky } from './sky.js';
+import { Viewmodel } from './viewmodel.js';
+import { Particles } from './particles.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,6 +69,14 @@ class Game {
     // radially, in every screen direction (see the fog_vertex override above)
     this.scene.fog = new THREE.Fog(0x9db4c8, 40, 106);
     this.sky = new Sky(this.scene);
+    // The held tool lives in its OWN scene + camera and draws in a second pass
+    // over a cleared depth buffer (see viewmodel.js). Built here, once: it is
+    // world-independent, so setupWorld() must never tear it down.
+    this.viewmodel = new Viewmodel(this);
+    // One pooled InstancedMesh for every shard, spore and spark. It belongs to
+    // the world scene but is NOT part of world.group, so a world rebuild leaves
+    // it alone — nothing here is ever re-allocated after construction.
+    this.particles = new Particles(this.scene);
 
     this.audio = new GameAudio();
     // accessibility (§7.5): presentation-only options, persisted per device.
@@ -125,6 +135,8 @@ class Game {
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
+      // the viewmodel has its own camera; without this the tool skews on resize
+      this.viewmodel.onResize();
       this.renderer.setSize(window.innerWidth, window.innerHeight);
     });
     window.addEventListener('beforeunload', () => { if (this.state === 'play' || this.state === 'paused') SaveStore.write(this); });
@@ -252,6 +264,16 @@ class Game {
     if (!this.furnaces.has(`${kk.x},${kk.y},${kk.z}`)) {
       this.furnaces.set(`${kk.x},${kk.y},${kk.z}`, { x: kk.x, y: kk.y, z: kk.z, type: 'kiln', fuel: 0, queue: [], progress: 0, out: {} });
     }
+    // ...and the looted crate in the starting shack, for the same reason: it is
+    // written by worldgen's _set(), which never runs placeBlock's `id === CHEST`
+    // hook, so without this the day-one crate shows an [F] prompt and does
+    // nothing when you press it. Guarded on the block still being there (a save
+    // may have mined it) and on the map not already holding it (a save's stored
+    // contents win over a fresh empty crate).
+    const cr = this.world.poi.crate;
+    if (cr && this.world.get(cr.x, cr.y, cr.z) === B.CHEST && !this.chests.has(`${cr.x},${cr.y},${cr.z}`)) {
+      this.chests.set(`${cr.x},${cr.y},${cr.z}`, { items: [] });
+    }
     // Roane's outline in the vault — tragic evidence, not an enemy (§18.4)
     if (this.roaneMesh) { this.scene.remove(this.roaneMesh); disposeGroup(this.roaneMesh); }
     const rp = this.world.poi.deep.roane;
@@ -259,6 +281,41 @@ class Game {
     this.roaneMesh.position.set(rp.x + 0.5, rp.y, rp.z + 0.5);
     this.scene.add(this.roaneMesh);
     this._roaneSeen = false;
+
+    // The player's own body, so looking down shows legs instead of empty air.
+    // Rebuilt per world like roaneMesh, and disposed the same way — a new world
+    // must not leak the old body's geometry.
+    if (this.playerBody) { this.scene.remove(this.playerBody.group); disposeGroup(this.playerBody.group); }
+    this.playerBody = buildPlayerMesh();
+    // First person: the head sits where the camera is and the arms would sweep
+    // straight through it. The viewmodel supplies the arm you actually see.
+    // Hide them from the CAMERA ONLY — three's shadow pass bails on
+    // `object.visible === false` before it ever looks at castShadow, so using
+    // Object3D.visible here would cast a headless, armless torso across the
+    // ground at every hour of the day. colorWrite/depthWrite = false keeps the
+    // mesh in both passes: it writes no pixels and no depth in the colour pass
+    // (so it cannot punch a hole in the world behind it), but the depth material
+    // the shadow map builds ignores both flags and still stamps the silhouette.
+    // The material has to be cloned first — head shares `skin` with the hands
+    // and the cap shares `coatDark` with the shoulder yoke, both of which stay
+    // visible. disposeGroup traverses meshes, so the clones are freed with the
+    // rest of the body.
+    const hideFromCamera = (o) => {
+      if (o.material.colorWrite === false) return;   // already hidden — never clone twice, that leaks
+      o.material = o.material.clone();
+      o.material.colorWrite = false;
+      o.material.depthWrite = false;
+    };
+    hideFromCamera(this.playerBody.parts.head);
+    for (const a of this.playerBody.parts.arms) hideFromCamera(a);
+    // Anything sitting at or above eye height is inside the camera itself (the
+    // cap rides at 1.62 against PLAYER.eye 1.55). Hiding the head alone would
+    // leave the player staring at the underside of their own hat.
+    for (const o of this.playerBody.group.children)
+      if (o.isMesh && o.position.y >= PLAYER.eye) hideFromCamera(o);
+    this.playerBody.group.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    this.scene.add(this.playerBody.group);
+    this._bodyPhase = 0;
 
     // reservoir viability = live tissue cells in the vault (§18.4); recount on
     // load so broken tissue stays broken across save round-trips
@@ -716,6 +773,8 @@ class Game {
         // melee always shoves at full power; continuous sources (UV, traps)
         // gate on a mostly-spent kb so they stagger rather than stunlock
         enemy.applyKnockback?.(this.player.pos, held?.def?.kb || COMBAT.handKb);
+        this.viewmodel.startSwing('attack');
+        this.particles.burstHit(enemy.pos, 0xc9524a);
         this.audio.hitEnemy();
         this.inv.useToolDurability(1);
         this.attackCd = 0.45;
@@ -726,6 +785,7 @@ class Game {
     const critter = this.raycastCritter(origin, dir, reach);
     if (critter) {
       critter.hp -= held?.def?.dmg || 1;
+      this.viewmodel.startSwing('attack');
       this.audio.hitEnemy();
       this.sig.addBlood(critter.pos.x, critter.pos.y + 0.3, critter.pos.z, 0.8);
       critter.fleeing = 6;
@@ -733,6 +793,14 @@ class Game {
       if (critter.hp <= 0) this.killCritter(critter);
       return;
     }
+    // Nothing connected — but the click still has to animate. The 'mine' chop
+    // loop in Viewmodel.update cannot cover this: it needs player.mineTarget,
+    // which updateMining only sets on a LATER frame, and only when the crosshair
+    // is on a block AND the button is still down. So a swing at open air, or a
+    // quick tap, would leave the tool completely motionless. Aiming at a block
+    // starts the chop right here so the first frame moves; update() then loops
+    // it for as long as LMB is held. No attackCd: a miss costs no swing budget.
+    this.viewmodel.startSwing(this.player.raycast() ? 'mine' : 'attack');
   }
 
   raycastCritter(origin, dir, reach) {
@@ -924,6 +992,9 @@ class Game {
       // settle top cell first: a sand column has to land there before the
       // lower cell can pull it the rest of the way down
       for (const c of cells.reverse()) this.settleFalls(c.x, c.y, c.z);
+      // shards in the door/bed's own colour — `id` is still the part that stood
+      // at (x,y,z) before the world writes above cleared it
+      this.particles.burstBlock(x, y, z, blockShardColor(id));
       this.audio.breakBlock();
       this.inv.useToolDurability(1);
       const overflow = this.inv.add(drop, 1);
@@ -932,7 +1003,9 @@ class Game {
       return;
     }
     if (def.lode) {
-      // lodes yield but never deplete — hold LMB to keep extracting
+      // lodes yield but never deplete — hold LMB to keep extracting. The block
+      // survives, so this is chips flying off the face, not a break.
+      this.particles.burstBlock(x, y, z, blockShardColor(id));
       this.audio.breakBlock();
       this.inv.useToolDurability(1);
       const overflow = this.inv.add(def.lode, 1);
@@ -940,6 +1013,9 @@ class Game {
       this.audio.pickup(); this.hud.updateHotbar();
       return;
     }
+    // shards in the colour of the block that just vanished — `id` was captured
+    // at the top of the method, so it survives the world write below
+    this.particles.burstBlock(x, y, z, blockShardColor(id));
     this.world.set(x, y, z, B.AIR);
     this.clearBlockCell(x, y, z, id);
     this.audio.breakBlock();
@@ -1556,6 +1632,9 @@ class Game {
   }
 
   onInfectedKilled(inf) {
+    // a body comes apart: strain-coloured chunks scaled to its frame, plus the
+    // slow spore drift burstDeath() adds on top
+    this.particles.burstDeath(inf.pos, inf.s.color, inf.s.scale);
     this.score += SCORE.perKill[inf.strainKey] || 5;
     this.hud.updateScore();
     if (inf.strainKey === 'colony_host') this.onBossKilled(inf);
@@ -1884,8 +1963,9 @@ class Game {
       if (this.world.get(x, y, z) !== B.TRAP) continue;
       inf.takeHit(7 * dt, true);
       // ticks every frame while standing in it — gate on a mostly-spent shove
-      // so this stays a stagger-wiggle, not a full ejection every frame
-      if (inf.kb.lengthSq() < 0.4) inf.applyKnockback?.({ x: x + 0.5, z: z + 0.5 }, COMBAT.trapKb);
+      // so this stays a stagger-wiggle, not a full ejection every frame, and
+      // pass { stun: false } so a body standing in spikes is never stunlocked
+      if (inf.kb.lengthSq() < 0.4) inf.applyKnockback?.({ x: x + 0.5, z: z + 0.5 }, COMBAT.trapKb, { stun: false });
       const key = `${x},${y},${z}`;
       const wear = (this.trapWear.get(key) || 0) + 7 * dt;
       if (wear > 60) {
@@ -2065,6 +2145,13 @@ class Game {
     }
     this.lights.update(this.camera.position);
     this.renderer.render(this.scene, this.camera);
+    // Second pass, AFTER the world: the viewmodel clears depth and draws the
+    // held tool on top of everything. Derived from state rather than toggled at
+    // each open/close site because a full-screen panel can be dismissed a dozen
+    // ways (Escape, a Close button, a machine vanishing under the player) and a
+    // pick left floating over the inventory would survive any missed one.
+    this.viewmodel.visible = this.state === 'play' && !this.hud.isScreenOpen();
+    this.viewmodel.render(this.renderer);
   }
 
   update(dt) {
@@ -2081,6 +2168,49 @@ class Game {
     this.attackCd = Math.max(0, this.attackCd - dt);
 
     this.player.update(dt);
+    // The viewmodel tracks the hotbar selection and the player's own motion.
+    // selectedItem() returns { id, n, def } (see inventory.js) — `.id` is the
+    // unified item key buildToolMesh() expects; a non-tool selection (blocks,
+    // ore, food) resolves to bare hands inside setItem().
+    const held = this.player.heldItem();
+    this.viewmodel.setItem(held?.id ?? null);
+    this.viewmodel.update(dt, {
+      // squared horizontal speed: sway only while actually walking, and only on
+      // the ground — a falling player's tool should hang still
+      moving: this.player.onGround && (this.player.vel.x ** 2 + this.player.vel.z ** 2) > 0.6,
+      mining: !!this.player.miningHeld && !!this.player.mineTarget,
+    });
+    // The player's own body follows the feet; only yaw, because pitching it
+    // would tip your legs into view every time you looked down.
+    if (this.playerBody) {
+      const b = this.playerBody;
+      // Seat the body BEHIND the eye instead of directly under it. Anatomically
+      // the camera sits ~0.19 above the shoulder line, so a centred body puts a
+      // flat shoulder-yoke face 0.18 blocks from the near plane: looking down
+      // filled 59% of the screen with untextured jacket AND covered the
+      // crosshair, which broke aiming at your own feet. Measured in-game at
+      // several offsets (0 -> 59% and blocked, 0.16 -> 35%, 0.22 -> 22%);
+      // 0.18 keeps the torso and legs clearly readable when you look down while
+      // never intruding at level or glancing angles. Offset is along -forward
+      // (forwardVec = -sin yaw, -cos yaw), so it rides the turn with the body.
+      const back = PLAYER.bodyBack;
+      b.group.position.set(
+        this.player.pos.x + Math.sin(this.player.yaw) * back,
+        this.player.pos.y,
+        this.player.pos.z + Math.cos(this.player.yaw) * back,
+      );
+      // +PI because models.js authors every body facing local +Z (the chest
+      // pouch and boot toes sit at positive z), while the player's forward is
+      // local -Z (forwardVec = -sin yaw, -cos yaw). Without the flip you would
+      // look down at your own heels.
+      b.group.rotation.y = this.player.yaw + Math.PI;
+      const spd = Math.hypot(this.player.vel.x, this.player.vel.z);
+      // phase advances with speed, so a standing player's legs stop dead
+      this._bodyPhase = (this._bodyPhase || 0) + spd * dt * 2.2;
+      const swing = Math.sin(this._bodyPhase) * Math.min(0.6, spd * 0.12);
+      b.limbs.legs[0].mesh.rotation.x = b.limbs.legs[0].rest + swing;
+      b.limbs.legs[1].mesh.rotation.x = b.limbs.legs[1].rest - swing;
+    }
     this.sig.update(dt);
     this.machines.update(dt);
     this.props.update(dt);
@@ -2094,6 +2224,7 @@ class Game {
     if (this._wildSweepT <= 0) { this._wildSweepT = 2; this.sweepWildPickups(); }
     this.updateCritters(dt);
     this.updateEffects(dt);
+    this.particles.update(dt);
     this.updateProjectiles(dt);
     this.updateTraps(dt);
     this.maybeSpawnBoss();
@@ -2234,9 +2365,9 @@ class Game {
     const p = this.player.pos;
     for (const pk of this.pickups) {
       pk.bob += dt * 2;
-      if (!pk.grounded) { // scatter litter lies still until magnetized
-        pk.mesh.position.y = pk.y + Math.sin(pk.bob) * 0.08;
-        pk.mesh.rotation.y += dt;
+      if (!pk.grounded) {          // dropped items float and turn — they read as loot
+        pk.mesh.position.y = pk.y + 0.06 + Math.sin(pk.bob) * 0.14;
+        pk.mesh.rotation.y += dt * 1.4;
       }
       const d = Math.hypot(pk.x - p.x, pk.y - (p.y + 0.8), pk.z - p.z);
       // scatter is invisible at range anyway — culling it keeps the draw
@@ -2247,6 +2378,18 @@ class Game {
       if (vis) {
         const s = Math.min(1, (64 - d) / 10);
         if (Math.abs(pk.mesh.scale.x - s) > 0.01) pk.mesh.scale.setScalar(s);
+        // Scatter litter (sticks, stones, fiber) lies flat on purpose, but a
+        // dead-still object is invisible in a forest: a slow sway catches the
+        // eye without lifting it off the ground. rotBase captures the authored
+        // spawn rotation (spawnPickups gives each index its own golden-angle
+        // turn) so the sway oscillates around it instead of resetting the
+        // deterministic scatter to a random heading.
+        // Strictly INSIDE the cull: core scatter alone is ~1000 entries and is
+        // never despawned, wilderness adds thousands more, and each write fires
+        // Euler's onChange -> quaternion.setFromEuler (six trig calls). Swaying
+        // meshes that are visible === false was ~90% wasted work. A pickup that
+        // comes back into range picks the sway up on its next frame.
+        if (pk.grounded) pk.mesh.rotation.y = (pk.rotBase ??= pk.mesh.rotation.y) + Math.sin(pk.bob * 0.5) * 0.06;
       }
       if (d < 2.0) { // magnet
         pk.grounded = false;
@@ -2336,6 +2479,15 @@ class Game {
 }
 
 function def2(id) { return BLOCKS[id]; }
+
+// Break shards borrow the block's own top-face colour so a mined seam sprays
+// grey and a chopped log sprays brown. `col` is either a flat hex or a
+// [top, side, bottom] triple (see BLOCKS in config.js).
+function blockShardColor(id) {
+  const d = BLOCKS[id];
+  const c = Array.isArray(d?.col) ? d.col[0] : d?.col;
+  return c ?? 0x8a8f96;
+}
 
 // boot
 const game = new Game();
